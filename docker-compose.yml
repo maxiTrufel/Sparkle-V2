@@ -1,0 +1,125 @@
+# ─── Servidor de aplicación de Sparkle V2 ────────────────────────────────
+#
+# Caddy (borde, TLS) → backend (Express + WS) → MariaDB.
+#
+# Solo Caddy publica puertos al host. El backend y la base viven en redes
+# internas de Docker, sin exposición directa — que es exactamente lo que
+# afirma la sección 3.7.2 de la tesis. El `ufw` del paso 4.6 (22/80/443) es
+# la segunda capa, no la única.
+#
+# Variables: este archivo lee `Sparkle_V2/.env` (ver .env.example) para las
+# credenciales de la base y el dominio. Los secretos de la aplicación
+# (OpenAI, Vexa, ALLOWED_EXTENSION_IDS) van aparte, en `backend/.env`.
+
+name: sparkle-v2
+
+services:
+  # ── Base de datos ──────────────────────────────────────────────────────
+  db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?falta DB_ROOT_PASSWORD en Sparkle_V2/.env}
+      MARIADB_DATABASE: ${DB_NAME:-sparkle_v2}
+      MARIADB_USER: ${DB_USER:?falta DB_USER en Sparkle_V2/.env}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en Sparkle_V2/.env}
+    volumes:
+      # ⚠️ VOLUMEN PERSISTENTE 1 de 2 (paso 3.3) — los datos.
+      - db_data:/var/lib/mysql
+    networks:
+      - internal
+    # `healthcheck.sh` viene en la propia imagen de MariaDB. Importa que
+    # sea un healthcheck real y no un `sleep`: el arranque en frío de
+    # MariaDB (primera vez, cuando inicializa el datadir) tarda bastante
+    # más que el del contenedor, y el backend no debe intentar conectarse
+    # antes de tiempo.
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ── Backend (Express + WebSocket en /ws) ───────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    # Los secretos de la aplicación. Ojo: `environment` de abajo PISA lo que
+    # venga de acá (regla de Compose), que es justo lo que queremos con las
+    # DB_* — el backend/.env local trae DB_HOST=localhost, que adentro del
+    # contenedor apuntaría al propio contenedor y no a la base.
+    env_file:
+      - ./backend/.env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # `db` es el nombre del servicio: el DNS interno de Docker lo resuelve
+      # a la IP del contenedor de MariaDB.
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-sparkle_v2}
+      DB_USER: ${DB_USER:?falta DB_USER en Sparkle_V2/.env}
+      DB_PASSWORD: ${DB_PASSWORD:?falta DB_PASSWORD en Sparkle_V2/.env}
+    volumes:
+      # ⚠️ VOLUMEN PERSISTENTE 2 de 2 (paso 3.3) — los PDFs del docente.
+      #
+      # La ruta NO es arbitraria: `src/utils/uploadStorage.js:13` la deriva
+      # de __dirname y con WORKDIR /app da exactamente esto. Sin este
+      # volumen, cada `docker compose down` borra los documentos de
+      # contexto de todas las clases y la base queda apuntando a archivos
+      # que ya no existen. El paso 6.5 lo verifica.
+      - uploads_data:/app/uploads/documents
+    depends_on:
+      db:
+        condition: service_healthy
+    # SIN `ports:` a propósito — al backend solo se llega por Caddy.
+    networks:
+      - internal
+      - edge
+
+  # ── Borde: TLS y reverse proxy ─────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:?falta DOMAIN en Sparkle_V2/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # ⚠️ TERCER volumen, y no es opcional aunque el plan hable de dos.
+      #
+      # Acá viven los certificados de Let's Encrypt y la clave de la cuenta
+      # ACME. Sin persistirlo, cada recreación del stack vuelve a pedir el
+      # certificado desde cero — y Let's Encrypt tiene rate limits (5
+      # fallos por hora, 50 certificados por dominio por semana). Un par de
+      # redeploys de depuración y te quedás sin HTTPS por una semana, justo
+      # en la fase donde más vas a levantar y bajar el stack.
+      - caddy_data:/data
+      - caddy_config:/config
+    # `service_started` y no `service_healthy`: si el backend está caído,
+    # se prefiere que Caddy levante igual y devuelva 502 (diagnosticable,
+    # con logs) antes que no arranque nada y no haya ni a quién preguntarle.
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - edge
+
+volumes:
+  db_data:
+  uploads_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  # Caddy ↔ backend.
+  edge:
+  # backend ↔ base. `internal: true` = sin ruta hacia afuera: aunque la
+  # base quisiera, no puede salir a internet. El backend sí puede (OpenAI,
+  # Vexa) porque está también en `edge`.
+  internal:
+    internal: true

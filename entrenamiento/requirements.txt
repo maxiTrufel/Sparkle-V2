@@ -1,0 +1,38 @@
+# Sparkle V2: código del modelo de detección de atención
+#
+# Hay dos entornos, porque el código se ejecutó en dos lugares distintos.
+#
+# A) Notebooks de Fase 1 y Fase 3 (extracción y entrenamiento sobre DAiSEE).
+#    Se ejecutaron en Google Colab con GPU T4, entre julio y agosto de 2026.
+#    Colab trae su propio TensorFlow; las versiones registradas son TensorFlow 2.19 y 2.20.0,
+#    con Keras 3.13.2. La versión de scikit-learn de Colab no se registró en ese momento.
+#    El ensamble final se reentrenó desde cero con las versiones de abajo y se obtuvo el mismo
+#    76,13 % sobre la partición de prueba (ver LEEME.md, «Reproducibilidad»).
+#
+# B) Scripts de Fase 4/analisis (validación de las reglas geométricas con conjuntos públicos).
+#    Se ejecutaron en local con Python 3.13. Versiones registradas en la bitácora de ejecución:
+#    MediaPipe 1.0.0, OpenCV 5.0.0 y NumPy 2.3.4.
+#    Los arneses .mjs requieren Node.js 22 y el código de la extensión (incluido en extension_medida/).
+
+# --- Comunes ---
+numpy==2.3.4
+pandas==2.3.3
+scipy==1.16.2
+scikit-learn==1.7.2
+matplotlib
+tqdm
+
+# --- Visión ---
+mediapipe
+opencv-python
+
+# --- Entrenamiento (A) ---
+tensorflow==2.20.0
+keras==3.13.2
+joblib
+kagglehub          # descarga de DAiSEE desde Kaggle (requiere credenciales propias)
+focal-loss         # solo Fase 1/Sparkle_V2_Fase2Modelado_BiGRU.ipynb
+
+# --- Validación (B) ---
+huggingface_hub    # descarga de BIWI
+openpyxl           # lectura de las etiquetas de EngageNet (.xlsx)

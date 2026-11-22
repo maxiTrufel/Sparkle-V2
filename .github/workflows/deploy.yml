@@ -1,0 +1,476 @@
+# Entrega continua — paso E del plan de despliegue.
+#
+# QUÉ LO DISPARA
+# --------------
+#   · Un tag `vX.Y.Z`  → despliega esa versión.
+#   · A mano, desde la pestaña Actions, eligiendo una versión → ROLLBACK.
+#
+# `main` NO despliega. Se puede mergear todo el día sin tocar producción;
+# lo que está desplegado es siempre un tag, y ese tag coincide con la
+# `version` del manifest de la extensión. "Qué está en el servidor" y "qué
+# está en la Chrome Web Store" pasan a ser la misma pregunta.
+#
+# ROLLBACK
+# --------
+#   gh workflow run deploy.yml -f version=v0.1.0
+#
+# La imagen vieja sigue en GHCR, así que es bajarla y levantar: ~40 s, sin
+# compilar nada.
+#
+# ⚠️ Lo que el rollback NO revierte es el ESQUEMA de la base. Las
+# migraciones son forward-only: volver al código anterior lo deja
+# corriendo contra una base ya migrada. Por eso toda migración tiene que
+# ser compatible hacia atrás — ver backend/migrations/README.md.
+name: Deploy
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Tag a desplegar (ej. v0.1.0). Para rollback, poné una versión anterior.'
+        required: true
+        type: string
+
+# Dos deploys en paralelo sobre la misma máquina se pisan: uno escribe los
+# .env mientras el otro levanta el stack. `cancel-in-progress: false` a
+# propósito — un deploy a medias es peor que uno que espera.
+concurrency:
+  group: deploy-produccion
+  cancel-in-progress: false
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════
+  version:
+    name: Resolver versión
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolver.outputs.tag }}
+      imagen: ${{ steps.resolver.outputs.imagen }}
+    steps:
+      # El tag viene de dos lugares distintos según cómo se disparó, y
+      # todo lo de abajo necesita un solo nombre. Se resuelve una vez acá.
+      - id: resolver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          if ! echo "$TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::\"$TAG\" no es una versión válida. Formato: vX.Y.Z"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # GHCR rechaza cualquier mayuscula en el nombre del repositorio, y
+          # `github.repository_owner` viene tal como esta escrito en GitHub
+          # (`maxiTrufel`). Las expresiones de Actions no tienen forma de
+          # bajar el caso, asi que se resuelve aca, en shell, junto con el
+          # tag: los dos jobs de abajo lo leen de este output.
+          DUENIO=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "imagen=ghcr.io/${DUENIO}/sparkle-backend" >> "$GITHUB_OUTPUT"
+          echo "Desplegando $TAG desde ghcr.io/${DUENIO}/sparkle-backend"
+
+  # ═══════════════════════════════════════════════════════════════════
+  imagen:
+    name: Imagen del backend → GHCR
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # En un rollback por workflow_dispatch, el checkout por defecto
+          # traería `main`. Hay que traer el tag pedido: es el código que
+          # se va a construir.
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # El token que GitHub inyecta solo. No hace falta ningún secreto
+          # para PUBLICAR en GHCR — es una de las razones por las que se
+          # eligió GHCR sobre ECR: no ata nada a la cuenta de AWS.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Si la imagen de este tag ya existe (caso típico de rollback), no se
+      # vuelve a construir: se despliega la que ya pasó por acá. Además de
+      # ahorrar ~2 minutos, garantiza que el rollback devuelva EXACTAMENTE
+      # el binario que estaba corriendo antes, y no una reconstrucción que
+      # podría diferir por una capa base actualizada.
+      - id: existe
+        env:
+          IMAGEN: ${{ needs.version.outputs.imagen }}
+        run: |
+          if docker manifest inspect "${IMAGEN}:${{ needs.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "ya=si" >> "$GITHUB_OUTPUT"
+            echo "La imagen ${{ needs.version.outputs.tag }} ya existe en GHCR — no se reconstruye."
+          else
+            echo "ya=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/build-push-action@v6
+        if: steps.existe.outputs.ya == 'no'
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ needs.version.outputs.imagen }}:${{ needs.version.outputs.tag }}
+            ${{ needs.version.outputs.imagen }}:latest
+          # Cache de capas entre corridas. Sin esto, cada deploy vuelve a
+          # correr el `npm ci` de 111 paquetes desde cero.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ═══════════════════════════════════════════════════════════════════
+  desplegar:
+    name: Desplegar en el servidor
+    needs: [version, imagen]
+    runs-on: ubuntu-latest
+    # `production` permite exigir aprobación manual antes de tocar el
+    # servidor (Settings → Environments). No está configurado así hoy;
+    # queda declarado para que activarlo sea un clic si alguna vez hace
+    # falta.
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - name: Preparar la clave SSH
+        run: |
+          install -d -m 700 ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          # `ssh-keyscan` y no `StrictHostKeyChecking=no`: sin esto, un
+          # ataque de intermediario en la red del runner recibiría la clave
+          # de deploy sin que nada chille. Se acepta la huella del host que
+          # responde AHORA, que no es verificación perfecta, pero deja de
+          # ser "aceptar cualquier cosa".
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # Estos tres archivos definen el stack y viven en el repo: se copian
+      # en cada deploy para que el servidor no pueda quedar corriendo una
+      # versión vieja del compose sin que nadie lo note.
+      - name: Copiar los archivos del stack
+        run: |
+          scp -i ~/.ssh/deploy \
+            docker-compose.yml docker-compose.prod.yml Caddyfile \
+            deploy@${{ secrets.EC2_HOST }}:/opt/sparkle/
+
+          # Los scripts de backup viajan en cada deploy, igual que el
+          # compose: así el servidor nunca queda corriendo una versión
+          # vieja del script que nadie recuerda haber puesto ahí.
+          ssh -i ~/.ssh/deploy deploy@${{ secrets.EC2_HOST }} 'mkdir -p /opt/sparkle/backups'
+          scp -i ~/.ssh/deploy \
+            infra/backups/backup.sh infra/backups/restaurar.sh \
+            deploy@${{ secrets.EC2_HOST }}:/opt/sparkle/backups/
+          ssh -i ~/.ssh/deploy deploy@${{ secrets.EC2_HOST }} 'chmod +x /opt/sparkle/backups/*.sh'
+
+      # ⚠️ Los .env se escriben en CADA deploy desde los secretos de
+      # GitHub, que son la fuente única de verdad. Nadie edita un .env a
+      # mano en el servidor: si lo hiciera, el próximo deploy lo pisaría y
+      # el cambio desaparecería sin dejar rastro.
+      #
+      # Se mandan por stdin de ssh y no por argumentos ni por scp de un
+      # archivo temporal: así los valores no pasan por la línea de comandos
+      # (visible en `ps` para cualquier proceso de la máquina) ni quedan en
+      # un archivo intermedio.
+      - name: Escribir los .env desde los secretos
+        run: |
+          ssh -i ~/.ssh/deploy deploy@${{ secrets.EC2_HOST }} \
+            'umask 077 && cat > /opt/sparkle/.env' <<'ENVFILE'
+          DOMAIN=${{ secrets.DOMAIN }}
+          DB_ROOT_PASSWORD=${{ secrets.DB_ROOT_PASSWORD }}
+          DB_USER=${{ secrets.DB_USER }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          DB_NAME=sparkle_v2
+          IMAGE_TAG=${{ needs.version.outputs.tag }}
+          BUCKET_BACKUPS=${{ secrets.BUCKET_BACKUPS }}
+          ENVFILE
+
+          ssh -i ~/.ssh/deploy deploy@${{ secrets.EC2_HOST }} \
+            'umask 077 && mkdir -p /opt/sparkle/backend && cat > /opt/sparkle/backend/.env' <<'ENVFILE'
+          NODE_ENV=production
+          PORT=3000
+          ALLOWED_EXTENSION_IDS=${{ secrets.ALLOWED_EXTENSION_IDS }}
+          SPARKLE_API_KEY=${{ secrets.SPARKLE_API_KEY }}
+          VEXA_API_URL=${{ secrets.VEXA_API_URL }}
+          VEXA_BOT_API_KEY=${{ secrets.VEXA_BOT_API_KEY }}
+          VEXA_TX_API_KEY=${{ secrets.VEXA_TX_API_KEY }}
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          ENABLE_AI_DOCUMENT_ANALYSIS=true
+          ENABLE_AI_QUESTION_GENERATION=true
+          ENABLE_AI_CLASS_SUMMARY=true
+          ENABLE_AI_CLASS_REPORT=true
+          RECOVERY_SUMMARY_ENABLED=true
+          OPENAI_SUMMARY_MODEL=gpt-4o-mini
+          OPENAI_QUESTION_MODEL=gpt-4o-mini
+          OPENAI_CLASS_SUMMARY_MODEL=gpt-4o-mini
+          OPENAI_RECOVERY_SUMMARY_MODEL=gpt-4o-mini
+          OPENAI_CLASS_REPORT_MODEL=gpt-4o-mini
+          ENVFILE
+
+      # El login va en un paso aparte, y el token viaja por el STDIN de
+      # ssh. Es la única forma de que no aparezca en la línea de comandos
+      # del proceso remoto, que cualquier proceso de la máquina puede leer
+      # con `ps`. El usuario no es secreto, así que ese sí va como
+      # argumento.
+      - name: Autenticar contra GHCR en el servidor
+        run: |
+          ssh -i ~/.ssh/deploy deploy@${{ secrets.EC2_HOST }} \
+            'docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin' \
+            <<< '${{ secrets.GHCR_READ_TOKEN }}'
+
+      - name: Bajar la imagen y levantar el stack
+        # IMAGEN y TAG no son secretos, así que pueden ir como argumentos
+        # del comando remoto sin problema. El heredoc va entre comillas
+        # simples para que el runner no expanda nada: todo lo que tiene $
+        # adentro lo resuelve el shell del servidor.
+        run: |
+          ssh -i ~/.ssh/deploy deploy@${{ secrets.EC2_HOST }} \
+            "IMAGEN='${{ needs.version.outputs.imagen }}' TAG='${{ needs.version.outputs.tag }}' bash -seo pipefail" \
+            <<'REMOTO'
+          set -u
+          cd /opt/sparkle
+          COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+
+          docker pull "${IMAGEN}:${TAG}"
+
+          # La base se levanta PRIMERO y sola. `--wait` bloquea hasta que
+          # su healthcheck pase: el arranque en frío de MariaDB (la primera
+          # vez, inicializando el datadir) tarda bastante más que el
+          # contenedor, y correr las migraciones antes de que esté lista
+          # falla con un error de conexión que parece otra cosa.
+          $COMPOSE up -d --wait db
+
+          # Migraciones en un contenedor efímero de la MISMA imagen que se
+          # está desplegando, con la misma red y el mismo .env. `--rm` para
+          # que no quede colgado, `--no-deps` para que no vuelva a levantar
+          # la base que ya está.
+          #
+          # Es `migrate` y NUNCA `init-db`: init-db dropea las tablas.
+          #
+          # ⚠️ `-T` y `</dev/null` no son decorativos. Este script entero
+          # llega al servidor por el STDIN de ssh (`bash -s`), y
+          # `compose run` sin esos dos conecta ESE MISMO stdin al
+          # contenedor: se traga el resto del script — el `up -d` de abajo
+          # incluido — y bash llega a EOF y termina con codigo 0. El
+          # sintoma es un deploy "exitoso" con la base levantada y ni
+          # backend ni caddy creados. Paso de verdad, en el primer deploy.
+          $COMPOSE run --rm --no-deps -T backend npm run migrate </dev/null
+
+          $COMPOSE up -d
+
+          # Las imágenes viejas se acumulan: con 30 GB de disco y una
+          # imagen de ~400 MB por versión, sin esto el disco se llena en
+          # unos meses. `-f` sin `-a`: solo borra las que ya no usa ningún
+          # contenedor, así que la anterior sobrevive para el rollback.
+          docker image prune -f
+          REMOTO
+
+      # El cron se reinstala en cada deploy en vez de configurarse una vez a
+      # mano. Un backup configurado a mano es un backup que, el día que la
+      # instancia se recree, nadie se acuerda de volver a poner — y su
+      # ausencia no da ninguna señal hasta que hace falta restaurar.
+      #
+      # 06:00 UTC = 03:00 en Argentina, y una hora ANTES del snapshot de
+      # disco que hace la política DLM (07:00 UTC): así el snapshot ya
+      # incluye el backup del día.
+      - name: Instalar el cron de backups
+        run: |
+          ssh -i ~/.ssh/deploy deploy@${{ secrets.EC2_HOST }} 'bash -seo pipefail' <<'REMOTO'
+          set -u
+          LINEA='0 6 * * * /opt/sparkle/backups/backup.sh >> /opt/sparkle/backups/backup.log 2>&1'
+          # Se reescribe el crontab entero filtrando la línea vieja: es
+          # idempotente, así que correrlo en cada deploy no acumula
+          # entradas duplicadas.
+          ( crontab -l 2>/dev/null | grep -v 'backups/backup.sh' || true; echo "$LINEA" ) | crontab -
+          echo "Cron instalado:"
+          crontab -l | grep backup.sh
+          REMOTO
+
+      # ⚠️ Un deploy que "salió bien" y dejó el sitio caído es peor que uno
+      # que falla: nadie se entera hasta que alguien intenta dar una clase.
+      - name: Verificar que el sitio responde
+        run: |
+          for intento in $(seq 1 12); do
+            codigo=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              "https://${{ secrets.DOMAIN }}/" || echo "000")
+            if [ "$codigo" = "200" ]; then
+              echo "OK: https://${{ secrets.DOMAIN }}/ responde 200 (intento $intento)"
+              exit 0
+            fi
+            echo "Intento $intento: código $codigo, reintentando en 10 s..."
+            sleep 10
+          done
+          echo "::error::El sitio no respondió 200 después de 2 minutos. El deploy queda marcado como fallido."
+          echo "::error::Revisá: ssh deploy@${{ secrets.EC2_HOST }} 'cd /opt/sparkle && docker compose logs --tail 100'"
+          exit 1
+
+      - name: Confirmar qué versión quedó corriendo
+        run: |
+          ssh -i ~/.ssh/deploy deploy@${{ secrets.EC2_HOST }} \
+            'cd /opt/sparkle && docker compose -f docker-compose.yml -f docker-compose.prod.yml images backend'
+
+  # ═══════════════════════════════════════════════════════════════════
+  extension:
+    name: Paquete de la extensión → Release
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - working-directory: frontend
+        run: npm ci
+
+      - name: Build apuntando a producción
+        working-directory: frontend
+        # Acá SÍ va la clave de API de verdad, a diferencia del build de
+        # CI: este es el paquete que se instala. Queda horneada en el
+        # bundle, que es lo que asume el diseño (ver
+        # backend/src/middleware/apiKey.js).
+        env:
+          VITE_BACKEND_URL: https://${{ secrets.DOMAIN }}
+          VITE_SPARKLE_API_KEY: ${{ secrets.SPARKLE_API_KEY }}
+        run: npm run build
+
+      # Los mismos checks del CI. Se repiten a propósito: este es el
+      # artefacto que se instala de verdad, y un paquete publicado sin los
+      # modelos o apuntando a localhost no da ningún error hasta que
+      # alguien intenta dar una clase con él.
+      - name: Verificar el paquete
+        working-directory: frontend
+        run: |
+          if grep -q "localhost:3000" dist/background.js; then
+            echo "::error::el paquete quedó apuntando a localhost"; exit 1
+          fi
+          for modelo in preprocesamiento.json modelo_ensemble.json cnn_extractor.tflite \
+                        modelo_A_resumen_lineal.tflite modelo_B_tcn_fusion.tflite face_landmarker.task; do
+            [ -s "dist/models/$modelo" ] || { echo "::error::falta dist/models/$modelo"; exit 1; }
+          done
+          # La versión del manifest tiene que coincidir con el tag: si no,
+          # "qué está desplegado" y "qué está en la Store" dejan de ser la
+          # misma pregunta, que es todo el punto de desplegar por tag.
+          VERSION_MANIFEST=$(node -p "require('./dist/manifest.json').version")
+          VERSION_TAG="${{ needs.version.outputs.tag }}"
+          if [ "v$VERSION_MANIFEST" != "$VERSION_TAG" ]; then
+            echo "::error::el manifest dice $VERSION_MANIFEST y el tag es $VERSION_TAG."
+            echo "::error::Actualizá frontend/public/manifest.json antes de taguear."
+            exit 1
+          fi
+          echo "OK: paquete verificado, versión $VERSION_MANIFEST"
+
+      # ⚠️ DOS paquetes, y NO son intercambiables.
+      #
+      # El manifest trae un campo `key` (la clave PÚBLICA) que es lo que
+      # hace que Chrome le asigne siempre el mismo id a la extensión
+      # descomprimida: `kcjeagahhmdfdmgnoidbpmhbfiggbeif`, el que está en
+      # ALLOWED_EXTENSION_IDS. Sin ese campo, cada máquina que la cargue
+      # descomprimida genera un id distinto y el backend la rechaza por
+      # CORS.
+      #
+      # Pero la Chrome Web Store **RECHAZA** un paquete que traiga `key`:
+      #   "key field is not allowed in manifest"
+      # El paso H.3 del plan decía que la Store lo "ignora" — no lo ignora,
+      # no deja subir el ZIP. Se descubrió intentando publicar v0.1.2.
+      #
+      # Por eso salen los dos:
+      #   extension-<tag>.zip        CON key    → cargar descomprimida
+      #   extension-store-<tag>.zip  SIN key    → subir a la Store
+      #
+      # El de la Store recibe de Google su PROPIO id, distinto, que hay que
+      # sumar a ALLOWED_EXTENSION_IDS dejando los dos (ver H.3).
+      - name: Empaquetar los dos ZIP
+        working-directory: frontend/dist
+        run: |
+          set -eo pipefail
+          TAG="${{ needs.version.outputs.tag }}"
+
+          # 1) El de siempre, con `key`, para cargar descomprimida.
+          zip -qr "../../extension-${TAG}.zip" .
+
+          # 2) El de la Store: mismo build, sin `key`. Se edita con `node`
+          #    y no con `sed` porque tocar JSON con expresiones regulares
+          #    es exactamente cómo se rompe un manifest sin que nadie lo
+          #    note hasta que Chrome se niega a cargarlo.
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            if (!m.key) { console.error('::error::el manifest no traía key — revisá el build'); process.exit(1); }
+            delete m.key;
+            fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2) + '\n');
+          "
+          zip -qr "../../extension-store-${TAG}.zip" .
+
+          # Verificación cruzada: el que va a la Store NO puede traer key,
+          # y el otro SÍ. Si alguno sale al revés, el error aparecería
+          # recién al intentar publicar — o peor, con la extensión ya
+          # instalada y rechazada por CORS en la máquina de otro.
+          # Los dos chequeos van con `if` y no con `&&`/`||`: bajo
+          # `set -e`, una línea que termina en un `grep` sin coincidencias
+          # devuelve 1 y aborta el paso — y acá "no encontrar la key" es
+          # justamente el caso BUENO del segundo chequeo.
+          cd ../..
+          if ! unzip -p "extension-${TAG}.zip" manifest.json | grep -q '"key"'; then
+            echo "::error::extension-${TAG}.zip perdió el campo key: la descomprimida no tendría su id fijo"
+            exit 1
+          fi
+          if unzip -p "extension-store-${TAG}.zip" manifest.json | grep -q '"key"'; then
+            echo "::error::extension-store-${TAG}.zip todavía tiene key: la Store lo va a rechazar"
+            exit 1
+          fi
+          echo "OK: los dos paquetes verificados"
+
+      - name: Publicar el Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          files: |
+            extension-${{ needs.version.outputs.tag }}.zip
+            extension-store-${{ needs.version.outputs.tag }}.zip
+          generate_release_notes: true
+          body: |
+            ## Cuál bajar
+
+            | Archivo | Para qué |
+            |---|---|
+            | `extension-${{ needs.version.outputs.tag }}.zip` | Cargar **descomprimida** en Chrome (desarrollo y pruebas) |
+            | `extension-store-${{ needs.version.outputs.tag }}.zip` | Subir a la **Chrome Web Store** |
+
+            No son intercambiables: el primero trae el campo `key` del
+            manifest, que le da a la extensión descomprimida su id fijo
+            `kcjeagahhmdfdmgnoidbpmhbfiggbeif`. La Store **rechaza** un
+            paquete con ese campo, así que el segundo va sin él — y Google
+            le asigna un id propio, que hay que agregar a
+            `ALLOWED_EXTENSION_IDS`.
+
+            ## Instalación para desarrollo
+
+            1. Bajá `extension-${{ needs.version.outputs.tag }}.zip` y descomprimilo.
+            2. `chrome://extensions` → activá **Modo de desarrollador**.
+            3. **Cargar descomprimida** → elegí la carpeta descomprimida.
+
+            El paquete apunta a producción. Para desarrollo local se puede
+            cambiar la dirección del backend desde la página de opciones de
+            la extensión, sin recompilar nada.

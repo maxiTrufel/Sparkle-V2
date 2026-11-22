@@ -1,0 +1,32 @@
+{
+  "all": true,
+  "include": [
+    "src/**/*.js",
+    "src/**/*.jsx",
+    "file:/**/frontend/src/**/*.js",
+    "file:/**/frontend/src/**/*.jsx"
+  ],
+  "exclude": [
+    "src/content/main.jsx",
+    "src/background/main.js",
+    "src/offscreen/main.js",
+    "src/permission/main.js",
+    "src/offscreen/detector.js",
+    "src/offscreen/inference.js",
+    "src/utils/playAlertSound.js"
+  ],
+  "extension": [
+    ".js",
+    ".jsx"
+  ],
+  "reporter": [
+    "text",
+    "html",
+    "json-summary"
+  ],
+  "reports-dir": "coverage",
+  "check-coverage": true,
+  "lines": 85,
+  "statements": 85,
+  "exclude-after-remap": true
+}

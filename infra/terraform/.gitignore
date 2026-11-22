@@ -1,0 +1,27 @@
+# ⚠️ El state tiene datos sensibles en texto plano (paso C.9). No va a git.
+# Copia en Bitwarden después de cada apply: sin él, Terraform no sabe qué
+# recursos ya creó y un `apply` intentaría crear todo de nuevo.
+#
+# No hay backend remoto en S3 a propósito: son dos personas y solo una
+# corre `apply`. Y si el state igual se pierde, el escenario de
+# recuperación es exactamente el runbook de la fase J.
+terraform.tfstate
+terraform.tfstate.*
+.terraform/
+
+# `.terraform.lock.hcl` NO está acá: ese archivo SÍ se commitea. Fija el
+# hash exacto del provider de AWS, que es lo que hace que el `apply` de
+# dentro de seis meses baje el mismo binario que este. Sin él, el pin de
+# versions.tf (`~> 5.70`) igual dejaría entrar cualquier 5.x nueva.
+
+# Tiene tu IP, tu mail y tu clave pública. Nada catastrófico, pero es
+# configuración de una persona y no del proyecto.
+terraform.tfvars
+*.auto.tfvars
+
+crash.log
+crash.*.log
+
+# Los archivos de plan (`terraform plan -out=...`) traen los valores
+# resueltos, secretos incluidos. Se generan y se descartan en el momento.
+*.tfplan

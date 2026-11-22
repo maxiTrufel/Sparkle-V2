@@ -1,0 +1,21 @@
+# El .env del compose: contiene las credenciales de MariaDB y el dominio.
+# Hasta ahora el único .gitignore del repo estaba en backend/, así que un
+# .env en esta carpeta se habría commiteado sin que nadie lo notara.
+.env
+.env.*
+!.env.example
+
+# ⚠️ Clave privada de la extensión (paso 2.4). Es lo que fija el ID de la
+# extensión descomprimida: si se filtra, cualquiera puede publicar una
+# extensión que se haga pasar por la de ustedes ante el backend, porque el
+# ID es todo lo que valida ALLOWED_EXTENSION_IDS. Y si se pierde, se pierde
+# el ID. Va al gestor de contraseñas (paso 3.12), nunca acá.
+*.pem
+
+# Basura de macOS.
+.DS_Store
+
+# Medidas extraídas de los videos de DAiSEE: la licencia no permite cederlas a
+# terceros, así que no se versionan aunque alguien las regenere localmente
+# (ver entrenamiento/LEEME.md, sección 4).
+reglas_referencia.json

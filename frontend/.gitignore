@@ -1,0 +1,29 @@
+node_modules
+dist
+.DS_Store
+
+# Variables de entorno de build (Vite) — ver frontend/.env.example para la
+# plantilla sin valores reales. Redundante con la entrada `.env` del
+# .gitignore de la raíz del repo (sin slash inicial, cubre cualquier
+# profundidad), pero se deja explícito acá también como defensa en
+# profundidad, mismo criterio que backend/.gitignore.
+.env
+.env.local
+.env.*.local
+
+# Bundles temporales que arma tests/helpers/reactHarness.js (esbuild) para
+# montar App.jsx real en jsdom — se generan y se leen en el momento, no
+# hace falta versionarlos. Namespaced por PID (Etapa 64, ver ese archivo) —
+# `tests/.tmp/` (sin sufijo) quedó obsoleto desde ese cambio, el patrón real
+# hoy es `tests/.tmp-<pid>/`.
+tests/.tmp/
+tests/.tmp-*/
+
+# Los modelos de la detección de atención SÍ se versionan (paso A.2 del plan de
+# despliegue). Son 4,8 MB en total y hacen el repo autocontenido: sin ellos un
+# build de CI sale con la detección rota y *sin dar error* —
+# `preprocesamiento.json` es el caso peor, porque su ausencia no rompe nada,
+# solo alimenta al modelo con features sin normalizar. Ver `public/models/README.md`.
+
+# Reporte de cobertura (c8) — se genera con `npm run test:coverage`.
+coverage/

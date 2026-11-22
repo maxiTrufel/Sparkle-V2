@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sparkle — detección de atención</title>
+  </head>
+  <body>
+    <!--
+      Documento offscreen: no tiene interfaz, nunca se muestra al usuario. Existe
+      únicamente porque MediaPipe y LiteRT.js necesitan WebAssembly, y en
+      Manifest V3 eso requiere 'wasm-unsafe-eval' en la CSP de las páginas de
+      extensión — un content script hereda la CSP de meet.google.com y el
+      service worker no tiene DOM ni GPU. Ver src/offscreen/main.js.
+    -->
+    <script type="module" src="offscreen.js"></script>
+  </body>
+</html>

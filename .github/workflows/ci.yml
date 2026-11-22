@@ -1,0 +1,257 @@
+# Integración continua — paso D del plan de despliegue.
+#
+# El valor de esto no es el "no tipear comandos": es que las 491 pruebas del
+# proyecto (198 de backend, 293 de frontend) corran en CADA PR, en vez de
+# cuando alguien se acuerda. Son tests de integración reales contra una base
+# de datos real, así que los tres jobs que la necesitan levantan MariaDB.
+#
+# El job `build` es el que atrapa el error más caro del proyecto: un paquete
+# de extensión compilado sin los modelos de detección de atención, o apuntando
+# a localhost. Ninguna de las dos cosas falla en tiempo de build — fallan en
+# vivo, durante una clase.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Un push nuevo sobre la misma rama cancela la corrida anterior. Sin esto,
+# tres pushes seguidos dejan tres corridas compitiendo por los runners y la
+# que importa (la última) es la que más tarda en arrancar.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  # Tienen que coincidir con lo que espera `backend/src/db.js`, que lee
+  # `process.env` directo (no pasa por dotenv en los tests).
+  DB_HOST: 127.0.0.1
+  DB_PORT: '3306'
+  DB_USER: root
+  DB_PASSWORD: sparkle-ci
+  DB_NAME: sparkle_v2
+
+jobs:
+  # ---------------------------------------------------------------------
+  backend:
+    name: Backend (198 tests, cobertura ≥ 85 %)
+    runs-on: ubuntu-latest
+
+    services:
+      mariadb:
+        # Misma versión mayor que `docker-compose.yml` — que el CI corra
+        # contra otra versión de la que corre en producción sería
+        # exactamente el tipo de diferencia que este job existe para
+        # descartar.
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: sparkle-ci
+        ports:
+          - 3306:3306
+        # Sin el healthcheck, los primeros tests corren contra un MariaDB que
+        # todavía está inicializando y fallan con ECONNREFUSED de forma
+        # intermitente — el peor modo de fallar que puede tener un CI.
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: backend
+        run: npm ci
+
+      - name: Crear el esquema con las migraciones
+        working-directory: backend
+        # `migrate`, no `init-db`: es el mismo camino que corre el deploy, así
+        # que el CI verifica de paso que las migraciones dejan un esquema
+        # sobre el que los tests pasan. Una migración rota falla acá y no en
+        # producción.
+        run: npm run migrate
+
+      # Corre la batería completa bajo c8: si algún test falla o la cobertura
+      # de líneas o sentencias baja del 85 % (umbral en backend/.c8rc.json),
+      # el job falla. Mismo comando que se usa en local.
+      - name: Tests con cobertura (umbral 85 %)
+        working-directory: backend
+        run: npm run test:coverage
+
+      - name: Subir el reporte de cobertura
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cobertura-backend
+          path: backend/coverage/
+          # Mismo criterio que el dist/ de abajo: 1 día alcanza para mirarlo
+          # (la cuota de artifacts se cobra por hora guardada).
+          retention-days: 1
+
+  # ---------------------------------------------------------------------
+  frontend:
+    name: Frontend (274 tests, cobertura ≥ 85 %)
+    runs-on: ubuntu-latest
+
+    # Sí, el job de frontend necesita MariaDB. No es un error de copiar y
+    # pegar: siete archivos de `frontend/tests/` levantan el Express y el
+    # WebSocket REALES del backend dentro del mismo proceso, contra la base
+    # de datos real (`App.integracionBackendReal.test.js`,
+    # `CameraPreview.integracionBackendReal.test.js` y cinco más que usan el
+    # harness). Son justamente los que más valen: cubren la cadena completa
+    # UI → mensaje interno → REST/WS → base. Sin la base, o fallan o —peor—
+    # se saltean y el CI queda verde ignorándolos.
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: sparkle-ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      # Esos mismos tests hacen `require(path.join(BACKEND_ROOT,
+      # 'node_modules', 'express'))` por ruta absoluta: sin las dependencias
+      # del backend instaladas, el job revienta con MODULE_NOT_FOUND antes de
+      # correr un solo test.
+      - name: Instalar dependencias del backend (las usan los tests de integración)
+        working-directory: backend
+        run: npm ci
+
+      - name: Instalar dependencias del frontend
+        working-directory: frontend
+        run: npm ci
+
+      - name: Crear el esquema
+        working-directory: backend
+        run: npm run migrate
+
+      # Ídem backend (umbral en frontend/.c8rc.json). Qué archivos se
+      # excluyen y por qué, y cómo se miden las pantallas de React (bundles de
+      # esbuild con source map), en docs/cobertura/README.md.
+      - name: Tests con cobertura (umbral 85 %)
+        working-directory: frontend
+        run: npm run test:coverage
+
+      - name: Subir el reporte de cobertura
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cobertura-frontend
+          path: frontend/coverage/
+          retention-days: 1
+
+  # ---------------------------------------------------------------------
+  build:
+    name: Build de la extensión
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        # `frontend/.env` está gitignoreado, así que en CI no existe: sin esta
+        # línea, `config.js` cae a su fallback `http://localhost:3000` y el
+        # paquete sale apuntando a la máquina de quien lo instale. La clave
+        # de API se deja vacía a propósito — el artifact de CI es para
+        # inspeccionar, no para instalar; el paquete que se publica lo arma el
+        # workflow de deploy con el secreto de verdad.
+        env:
+          VITE_BACKEND_URL: https://api.sparkleedu.me
+        run: npm run build
+
+      # Los tres checks de abajo existen porque los tres fallan EN SILENCIO:
+      # el build sale en verde igual y el problema aparece recién durante una
+      # clase en vivo.
+      - name: Verificar que no quedó localhost horneado
+        working-directory: frontend
+        # Se mira `background.js` y no todo `dist/`: `opciones.js` contiene
+        # legítimamente el texto "Por ejemplo: http://localhost:3000" como
+        # ayuda de la página de opciones.
+        run: |
+          if grep -q "localhost:3000" dist/background.js; then
+            echo "::error::dist/background.js quedó apuntando a localhost. ¿Se buildeó sin VITE_BACKEND_URL?"
+            grep -n "localhost:3000" dist/background.js
+            exit 1
+          fi
+          echo "OK: sin localhost en dist/background.js"
+
+      - name: Verificar que el dominio de producción sí está
+        working-directory: frontend
+        run: |
+          if ! grep -q "api.sparkleedu.me" dist/background.js; then
+            echo "::error::dist/background.js no contiene el dominio de producción."
+            exit 1
+          fi
+          echo "OK: el build apunta a api.sparkleedu.me"
+
+      - name: Verificar que están los 6 modelos de detección de atención
+        working-directory: frontend
+        # Sin `preprocesamiento.json` el modelo recibe features sin normalizar
+        # y devuelve predicciones sin sentido, sin dar ningún error. Es el
+        # modo de fallar más caro del proyecto — de ahí que sea un check
+        # explícito y no una confianza en que copy-model-assets.js avisó.
+        run: |
+          faltantes=0
+          for modelo in \
+            preprocesamiento.json \
+            modelo_ensemble.json \
+            cnn_extractor.tflite \
+            modelo_A_resumen_lineal.tflite \
+            modelo_B_tcn_fusion.tflite \
+            face_landmarker.task
+          do
+            if [ ! -s "dist/models/$modelo" ]; then
+              echo "::error::falta o está vacío dist/models/$modelo"
+              faltantes=1
+            fi
+          done
+          [ "$faltantes" -eq 0 ] || exit 1
+          echo "OK: los 6 modelos están en dist/models/"
+
+      - name: Subir el dist/ como artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: extension-dist
+          path: frontend/dist/
+          # 1 día alcanza para bajarlo e inspeccionarlo. El que importa de
+          # verdad (el de una versión publicada) lo adjunta el workflow de
+          # deploy al GitHub Release, que no expira. GitHub cobra el espacio
+          # por hora guardada: con 7 días, ~25 MB por corrida agotaron la
+          # cuota gratis de septiembre 2026 (ver bitácora, 29/9/2026).
+          retention-days: 1

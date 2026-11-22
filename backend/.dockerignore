@@ -1,0 +1,42 @@
+# ⚠️ Este archivo no es opcional: sin él la imagen se rompe o filtra datos.
+
+# El motivo #1. El node_modules local se instaló en Windows y contiene
+# @napi-rs/canvas-win32-x64-msvc (binario .node de win32, vía pdf-parse).
+# Si viaja al contexto de build, pisa lo que baja `npm ci` adentro de la
+# imagen y el backend revienta al primer PDF. Excluyéndolo, `npm ci`
+# resuelve el prebuild correcto: @napi-rs/canvas-linux-x64-gnu.
+node_modules
+npm-debug.log*
+
+# Secretos. El .env de producción se inyecta por el compose (3.2), nunca
+# se hornea en la imagen — una imagen con credenciales adentro las lleva a
+# cualquier registry donde termine.
+.env
+.env.*
+!.env.example
+
+# ⚠️ PDFs reales de los docentes (hoy hay 7 en uploads/documents/). Van en
+# un volumen persistente, no en la imagen. Además, el Dockerfile crea
+# /app/uploads/documents vacío y con el owner correcto — si esta carpeta
+# entrara por COPY, ese ownership se perdería.
+uploads/
+
+# Suite de tests: no corre en producción y necesita MariaDB levantado.
+tests/
+
+# Metadata de desarrollo, sin uso adentro del contenedor.
+.git
+.gitignore
+.nvmrc
+README.md
+Dockerfile
+.dockerignore
+
+# NO excluir scripts/ ni migrations/ — de ahí sale el esquema. El deploy
+# corre `npm run migrate` DENTRO de un contenedor efímero de esta misma
+# imagen (ver .github/workflows/deploy.yml); excluir cualquiera de las dos
+# carpetas dejaría al despliegue sin forma de crear ni actualizar las 10
+# tablas.
+#
+# `init-db.js` también queda: es el reset de desarrollo. Producción no lo
+# corre nunca — dropea todo.

@@ -1,0 +1,47 @@
+# ─── Override para prueba local y demo en red ────────────────────────────
+#
+# Se usa explícitamente con -f, NUNCA solo:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# ⚠️ Por qué NO se llama docker-compose.override.yml: ese nombre Compose lo
+# carga SOLO, sin que nadie lo pida. Si la carpeta se copia al servidor con
+# scp (paso 5.2), un archivo con ese nombre aplicaría la configuración de
+# prueba en producción —sin TLS y sin dominio— sin ningún aviso.
+
+services:
+  backend:
+    environment:
+      # ⚠️ Vexa corre en Docker en el HOST (contenedores `vexa-lite*`), no
+      # dentro de este compose. Y el backend ahora vive en un contenedor,
+      # así que el `VEXA_API_URL=http://localhost:8056` de backend/.env
+      # apuntaría al PROPIO contenedor del backend, donde no hay nada
+      # escuchando.
+      #
+      # `host.docker.internal` es el nombre que Docker Desktop resuelve a la
+      # máquina anfitriona — ahí sí está el gateway de Vexa lite en el 8056.
+      #
+      # Sin esto la transcripción falla en silencio: el backend arranca
+      # bien, el chequeo del paso 2.2 no se queja (la variable ESTÁ, solo
+      # apunta mal), y el error recién aparece cuando alguien aprieta
+      # "iniciar transcripción" en medio de la grabación.
+      VEXA_API_URL: http://host.docker.internal:8056
+    # En Docker Desktop `host.docker.internal` ya existe; declararlo
+    # explícitamente hace que también funcione si algún día se corre este
+    # override sobre Docker en Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  caddy:
+    # `!override` reemplaza la lista entera en vez de concatenarla. Sin
+    # esto, Compose podría terminar con los DOS Caddyfile apuntando al
+    # mismo destino.
+    volumes: !override
+      - ./Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+    # Local no necesita 443 ni HTTP/3: el Caddyfile.local sirve por HTTP
+    # plano. Publicar menos puertos = menos chance de chocar con algo que
+    # ya esté escuchando en Windows.
+    ports: !override
+      - "80:80"

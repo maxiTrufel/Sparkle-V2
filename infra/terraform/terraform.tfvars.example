@@ -1,0 +1,26 @@
+# Copiá este archivo a `terraform.tfvars` y completá los tres valores.
+# `terraform.tfvars` está gitignoreado.
+
+# Tu IP pública, con /32 al final. Averiguala con:
+#   curl -s https://checkip.amazonaws.com
+# Si tenés IP dinámica va a cambiar cada tanto: actualizá acá y volvé a
+# correr `terraform apply` (solo cambia una regla del security group, no
+# toca la instancia).
+mi_ip = "1.2.3.4/32"
+
+# Contenido de ~/.ssh/sparkle_deploy.pub — una clave DEDICADA al deploy,
+# no tu clave personal (paso E.7). Generala con:
+#   ssh-keygen -t ed25519 -f ~/.ssh/sparkle_deploy -C "deploy sparkle v2"
+clave_publica_ssh = "ssh-ed25519 AAAA... deploy sparkle v2"
+
+# Adónde llegan las alertas de presupuesto.
+email_alertas = "vos@ejemplo.com"
+
+# ── Opcionales, con default razonable ──────────────────────────────────
+# region                  = "sa-east-1"
+# tipo_instancia          = "t3.small"
+# arquitectura_ami        = "amd64"     # arm64 si pasás a t4g.small
+# tamano_disco_gb         = 30
+# presupuesto_mensual_usd = 50
+# dias_retencion_backups  = 30
+# snapshots_a_retener     = 7

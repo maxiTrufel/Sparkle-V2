@@ -1,0 +1,32 @@
+# ─── Variante LOCAL: paso 3.5 y demo en red ──────────────────────────────
+#
+# Para probar el compose en tu máquina no hay dominio ni DNS público, así
+# que Let's Encrypt no puede emitir nada: con el Caddyfile de producción,
+# Caddy reintentaría el desafío ACME contra un dominio que no resuelve y
+# el sitio nunca quedaría arriba.
+#
+# `:80` (en vez de `http://localhost`) escucha en el puerto 80 y responde a
+# CUALQUIER host. Eso es lo que permite que la misma configuración sirva
+# para las tres direcciones sin tocar nada:
+#
+#   http://localhost          → tu propia máquina
+#   http://192.168.1.40       → la máquina de Maxi por la red local
+#   http://100.x.x.x          → por Tailscale, desde donde sea
+#
+# Con `http://localhost` como estaba antes, un pedido desde otra máquina
+# llega con `Host: 192.168.1.40`, no coincide con ningún sitio declarado, y
+# Caddy responde 404 sin llegar nunca al backend.
+#
+# Se prueba todo el circuito (Caddy → backend → MariaDB, REST y WebSocket)
+# sobre `ws://` en vez de `wss://`; lo único que NO se ejercita es la
+# emisión del certificado, que se verifica recién en el paso 5.3 contra el
+# dominio real.
+
+:80 {
+	reverse_proxy backend:3000
+
+	log {
+		output stdout
+		format console
+	}
+}

@@ -1,0 +1,58 @@
+# ─── Borde del servidor de aplicación de Sparkle V2 ──────────────────────
+#
+# {$DOMAIN} sale del environment del contenedor (ver docker-compose.yml,
+# servicio `caddy`), que a su vez lo lee de Sparkle_V2/.env.
+#
+# Al nombrar un dominio real, Caddy activa HTTPS automático: pide el
+# certificado a Let's Encrypt, lo renueva solo, y redirige 80 → 443. No
+# hay que declarar nada de eso.
+
+{$DOMAIN} {
+	# ⚠️ UN SOLO reverse_proxy para todo — esta es la respuesta al aviso
+	# del paso 3.4 del plan.
+	#
+	# El plan advierte "si arman rutas separadas para /api y estáticos, no
+	# olvidar /ws". La forma de no olvidarse es no separarlas: el backend
+	# escucha la API REST y el WebSocket EN EL MISMO PUERTO — `ws/index.js:90`
+	# crea el WebSocketServer con `server: httpServer` y `path: '/ws'`,
+	# enganchado al mismo http.Server que Express (`server.js:86`). Y no
+	# hay estáticos que servir: `server.js` no monta ningún `express.static`
+	# (el frontend es una extensión de Chrome, no se sirve desde acá).
+	#
+	# Caddy 2 detecta el handshake de upgrade y hace el puente de la
+	# conexión WebSocket solo: no hace falta ningún bloque especial para
+	# /ws, y agregarlo solo abriría la puerta a que las dos rutas se
+	# desincronicen.
+	#
+	# Como el sitio se sirve por HTTPS, el navegador hace el upgrade a
+	# `wss://` — que es lo que verifica el primer ítem del paso 6.3.
+	reverse_proxy backend:3000
+
+	encode zstd gzip
+
+	# A stdout para que salga por `docker compose logs caddy` — que es de
+	# donde sale la verificación del paso 5.3 y el seguimiento del 6.4.
+	log {
+		output stdout
+		format console
+	}
+
+	header {
+		# Sin `includeSubDomains` a propósito: si más adelante usan un
+		# subdominio para otra cosa, no queda forzado a HTTPS de por vida.
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+}
+
+# ⚠️ Lo que NO va acá: cabeceras de CORS.
+#
+# El backend maneja su propio CORS con la whitelist de ALLOWED_EXTENSION_IDS
+# (`server.js:39`), y el WebSocket valida el header `Origin` por su cuenta
+# en `verifyClient` (`ws/index.js:93`). Caddy pasa `Origin` sin tocarlo,
+# que es justo lo que esas dos validaciones necesitan. Si Caddy agregara
+# sus propias cabeceras de CORS, se duplicarían con las del backend y los
+# navegadores rechazan las respuestas con `Access-Control-Allow-Origin`
+# repetido — un error que se lee como "problema de CORS" y manda a
+# depurar al lugar equivocado.

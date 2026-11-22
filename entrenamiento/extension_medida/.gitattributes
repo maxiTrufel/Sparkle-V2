@@ -1,0 +1,3 @@
+# Los scripts de Fase 4 verifican el SHA-256 de estos archivos byte por byte.
+# No normalizar los fines de linea.
+* -text

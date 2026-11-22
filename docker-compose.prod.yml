@@ -1,0 +1,77 @@
+# ─── Overlay de producción (paso E.2) ──────────────────────────────────
+#
+# Se usa SIEMPRE junto al compose base, nunca solo:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Lo único que cambia es de dónde sale la imagen del backend: el base la
+# construye desde ./backend, este la baja ya construida de GHCR.
+#
+# POR QUÉ EL SERVIDOR NO COMPILA
+# ------------------------------
+# La instancia tiene 2 GB de RAM. Un `npm ci` de 111 paquetes ahí es lento,
+# compite por memoria con MariaDB, y —lo peor— significa que el artefacto
+# que corre en producción se armó en un lugar distinto del que pasó el CI.
+# La imagen que despliega el workflow es EXACTAMENTE la que se construyó
+# desde el tag, verificable por digest.
+#
+# Efecto secundario que importa para el rollback: la imagen vieja sigue en
+# GHCR, así que volver a una versión anterior es cambiar IMAGE_TAG y
+# levantar de nuevo (~40 s), sin compilar nada.
+
+services:
+  backend:
+    # `!reset` borra el `build:` del compose base. Sin esto, Compose
+    # conserva las dos claves y `docker compose up` prefiere construir: el
+    # servidor intentaría compilar igual y el overlay no serviría de nada.
+    #
+    # ⚠️ La etiqueta va en el VALOR (`build: !reset null`), no en la clave
+    # (`!reset build:`). La segunda forma no da error, no hace nada, y el
+    # `config` sale con el `build` intacto — se verifica con
+    # `docker compose ... config | grep build`.
+    #
+    # Necesita Compose v2.24+; el plugin que instala el user_data de
+    # Terraform lo cumple de sobra.
+    build: !reset null
+
+    # El tag lo pasa el workflow de deploy (es la versión que se está
+    # desplegando). El default `latest` es solo para un `up` manual de
+    # emergencia; el deploy siempre pasa una versión concreta, porque
+    # "latest" no dice qué está corriendo y es justo lo que hay que poder
+    # responder.
+    image: ghcr.io/maxitrufel/sparkle-backend:${IMAGE_TAG:-latest}
+
+    # Sin esto, un `docker compose up -d` con una imagen que ya está en
+    # disco no se molesta en mirar si el registry tiene otra. El workflow
+    # hace `pull` explícito antes, así que es redundante — y es
+    # exactamente el tipo de redundancia que salva un deploy hecho a mano
+    # desde SSH a las 2 de la mañana.
+    pull_policy: always
+
+    # ⚠️ DNS: sin esto el backend NO encuentra a Vexa (paso F.6).
+    #
+    # El host resuelve `sparkle-vexa` porque systemd-resolved tiene el
+    # dominio de la tailnet, pero el CONTENEDOR no hereda nada de eso: el
+    # /etc/resolv.conf del host apunta a 127.0.0.53, una dirección que no
+    # significa nada adentro del contenedor, así que Docker la descarta y
+    # le da su resolver propio (127.0.0.11), que no conoce MagicDNS.
+    # Verificado: `getent hosts sparkle-vexa` adentro del backend falla.
+    #
+    # 100.100.100.100 es el resolver de Tailscale, y hace las dos cosas que
+    # hacen falta: resuelve los nombres de la tailnet (cortos y FQDN) y
+    # REENVÍA todo lo demás a los upstream. O sea que api.openai.com
+    # también sale por acá — comprobado antes de ponerlo.
+    #
+    # El 8.8.8.8 de atrás es la red de seguridad: si `tailscaled` se muere,
+    # el primero deja de responder y el resolver cae al segundo. Sin él, un
+    # Tailscale caído se llevaría puesto TODO el DNS del backend —incluido
+    # OpenAI— y convertiría una dependencia opcional (§8 dice que sin Vexa
+    # el sistema anda en modo degradado) en un punto único de falla. El
+    # costo es un timeout de unos segundos por consulta mientras dure esa
+    # situación.
+    #
+    # Va en el overlay y no en el compose base a propósito: en desarrollo
+    # local no hay Tailscale y 100.100.100.100 no existe.
+    dns:
+      - 100.100.100.100
+      - 8.8.8.8

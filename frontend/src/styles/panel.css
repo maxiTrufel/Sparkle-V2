@@ -1,0 +1,4602 @@
+:host {
+  /* Paleta estilo Google / Material (Meet, Gmail, Workspace) — ver
+     DOCUMENTACION.md, Etapa 12. */
+  --sparkle-primary: #1a73e8;
+  --sparkle-primary-hover: #1765cc;
+  --sparkle-primary-active: #185abc;
+  --sparkle-primary-light: #e8f0fe;
+
+  --sparkle-text-primary: #202124;
+  --sparkle-text-secondary: #5f6368;
+
+  --sparkle-bg: #ffffff;
+  --sparkle-bg-subtle: #f8f9fa;
+  --sparkle-border: #dadce0;
+  --sparkle-border-strong: #bdc1c6;
+  --sparkle-danger: #d93025;
+  --sparkle-success: #34a853;
+  --sparkle-warning: #b06000;
+  --sparkle-warning-light: #fef7e0;
+  /* Mismo criterio que `--sparkle-warning-light` — tinte sólido y OPACO
+     (nunca un `rgba(...)` semitransparente) para el fondo de una tarjeta
+     grande de estado. `--sparkle-danger-light` es el mismo hex que ya usaba
+     `.sparkle-button-danger:hover` (ver más abajo) — se sube acá para
+     reusarlo por nombre, no un color nuevo. */
+  --sparkle-success-light: #e6f4ea;
+  --sparkle-danger-light: #fce8e6;
+
+  --sparkle-radius: 8px;
+  /* Curva de easing "estándar" de Material Design, para que las
+     transiciones se sientan consistentes con el resto de Meet. */
+  --sparkle-easing: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 'Google Sans' no se puede cargar desde el content script sin traer la
+     fuente (evitamos requests de red externos — ver Etapa 2), así que se
+     declara primero y el navegador cae a Roboto/Arial, que ya están
+     instaladas en casi cualquier Chrome/Android y son visualmente muy
+     cercanas. */
+  --sparkle-font: 'Google Sans', Roboto, Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.sparkle-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 320px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--sparkle-bg);
+  color: var(--sparkle-text-primary);
+  font-family: var(--sparkle-font);
+  border-left: 1px solid var(--sparkle-border);
+  box-shadow: -1px 0 2px 0 rgba(60, 64, 67, 0.3), -2px 0 6px 2px rgba(60, 64, 67, 0.15);
+  pointer-events: auto;
+  transform: translateX(0);
+  transition: transform 280ms var(--sparkle-easing);
+  z-index: 1;
+}
+
+.sparkle-panel--closed {
+  transform: translateX(100%);
+}
+
+/* Botón flotante fijo, pegado al borde derecho de la pantalla, siempre
+   visible (incluso con el panel cerrado) para abrir/cerrar el panel —
+   estilo Material (elevación FAB), pero "naciendo" del borde en vez de
+   flotar separado de él: en reposo un semicírculo de 56×56 (redondeado
+   solo del lado izquierdo, recto y pegado del lado derecho), en hover
+   se extiende a una píldora que suma el ícono de Sparkle y el texto
+   "Sparkle" (Etapa 23/24, ajustado en la Etapa 25 para volver a quedar
+   pegado al borde sin espacio — ver el historial completo).
+
+   El ancho total (132px, el de la píldora expandida) está siempre
+   presente en el layout — nunca se anima `width` (dispara reflow). En
+   reposo se recorta a un cuadrado de 56×56 con `clip-path: inset(...
+   round 28px 0 0 28px)` (mismo orden que `border-radius`: superior-
+   izq., superior-der., inferior-der., inferior-izq.) — redondea solo
+   las esquinas izquierdas del recorte, dejando las derechas a 0/rectas,
+   igual que el `border-radius` del botón; en hover el inset se abre a
+   los 132px completos, con el mismo radio. Al ser siempre la misma
+   función (`inset()` con el mismo `round`), el navegador interpola
+   suavemente entre ambos estados en el compositor, igual que
+   transform/opacity. */
+.sparkle-toggle-tab {
+  position: fixed;
+  right: 0;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 132px;
+  height: 56px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 28px 0 0 28px;
+  background: linear-gradient(180deg, #1a73e8 0%, #1765cc 100%);
+  color: #ffffff;
+  font: inherit;
+  cursor: pointer;
+  user-select: none;
+  pointer-events: auto;
+  /* Elevación Material 6dp (FAB en reposo). */
+  box-shadow: 0 3px 5px -1px rgba(0, 0, 0, 0.2), 0 6px 10px 0 rgba(0, 0, 0, 0.14),
+    0 1px 18px 0 rgba(0, 0, 0, 0.12);
+  clip-path: inset(0 0 0 76px round 28px 0 0 28px);
+  opacity: 1;
+  transition:
+    clip-path 280ms var(--sparkle-easing),
+    background 280ms var(--sparkle-easing),
+    box-shadow 280ms var(--sparkle-easing),
+    transform 280ms var(--sparkle-easing),
+    opacity 280ms var(--sparkle-easing);
+  z-index: 2;
+}
+
+/* Con el panel abierto, el botón flotante se desplaza hacia la derecha
+   hasta salir de la vista (nunca se desmonta del DOM, para poder animar
+   también su reaparición al cerrar). Mientras está oculto, el cierre se
+   hace desde el control interno del panel (.sparkle-close-button en
+   Header.jsx), por eso además se desactivan sus eventos de puntero. */
+.sparkle-toggle-tab--open {
+  transform: translateY(-50%) translateX(100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* En hover el fondo se aclara levemente (en vez de oscurecerse, como el
+   resto de los botones del panel) para que quede claro que es
+   interactivo sin perder la identidad de color de Sparkle. La sombra
+   sube a la elevación Material 8dp (FAB "presionado"/hover).
+
+   El estado presionado reproduce exactamente el mismo efecto: además
+   de :active nativo (cubre activación por teclado), se incluye
+   --dragging, la clase que ToggleTab.jsx aplica en todo el intervalo
+   mousedown→mouseup, sin importar si el cursor sale del botón — así
+   el efecto no se pierde al arrastrar fuera de los límites del botón,
+   algo que :hover/:active nativos no garantizan por sí solos. La
+   transición (heredada de .sparkle-toggle-tab) es la misma al entrar
+   y al salir del estado. */
+.sparkle-toggle-tab:hover,
+.sparkle-toggle-tab:active,
+.sparkle-toggle-tab--dragging {
+  clip-path: inset(0 0 0 0 round 28px 0 0 28px);
+  background: linear-gradient(180deg, #2b83ea 0%, #1a73e8 100%);
+  box-shadow: 0 5px 5px -3px rgba(0, 0, 0, 0.2), 0 8px 10px 1px rgba(0, 0, 0, 0.14),
+    0 3px 14px 2px rgba(0, 0, 0, 0.12);
+}
+
+.sparkle-toggle-tab--dragging {
+  cursor: grabbing;
+}
+
+.sparkle-toggle-icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 220ms ease-out;
+}
+
+/* Pequeño "nudge" de la flecha en hover, en la misma dirección hacia la
+   que apunta (invita al click). Cerrado apunta a la izquierda, abierto
+   a la derecha — ver .sparkle-toggle-tab--open. */
+.sparkle-toggle-tab:hover .sparkle-toggle-icon,
+.sparkle-toggle-tab:active .sparkle-toggle-icon,
+.sparkle-toggle-tab--dragging .sparkle-toggle-icon {
+  transform: translateX(-3px);
+}
+
+.sparkle-toggle-tab--open:hover .sparkle-toggle-icon {
+  transform: translateX(3px);
+}
+
+.sparkle-toggle-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 200ms var(--sparkle-easing), transform 200ms var(--sparkle-easing);
+}
+
+.sparkle-toggle-tab:hover .sparkle-toggle-brand,
+.sparkle-toggle-tab:active .sparkle-toggle-brand,
+.sparkle-toggle-tab--dragging .sparkle-toggle-brand {
+  opacity: 1;
+  transform: translateX(0);
+  transition-delay: 60ms;
+}
+
+.sparkle-toggle-label {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Header / marca */
+
+.sparkle-header {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--sparkle-border);
+}
+
+.sparkle-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Alumno: nombre de usuario + email en una sola línea, diferenciados
+   visualmente (nombre destacado, email chico y en gris) — ver Header.jsx.
+   Sin alumno (docente u otro rol), solo se usa `.sparkle-header-email`
+   suelta, igual que siempre. */
+.sparkle-header-identity {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sparkle-header-username {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sparkle-text-primary);
+  flex-shrink: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sparkle-header-separator {
+  font-size: 11px;
+  color: var(--sparkle-text-secondary);
+  flex-shrink: 0;
+}
+
+.sparkle-header-email {
+  margin: 0;
+  font-size: 11px;
+  color: var(--sparkle-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Switch de cámara (Etapa 64, `CameraSwitch` en `CameraPreview.jsx`) —
+   HERRAMIENTA DE PRUEBA, pensada para eliminarse por completo antes de las
+   funcionalidades reales de IA (ver DOCUMENTACION.md): si ese componente se
+   saca, estas reglas se sacan con él. Interruptor estándar armado con un
+   checkbox nativo (accesible, togglea con teclado/lector de pantalla) pero
+   visualmente oculto (`sparkle-camera-switch-input`) — lo que se ve es el
+   track/thumb de al lado, sincronizados por CSS puro vía el selector
+   `:checked ~ ...` (sin JS extra para el estado visual).
+   `.sparkle-camera-switch-row` (Etapa 65) es el contenedor del ícono de
+   información + el switch, uno al lado del otro — el margen que separaba al
+   switch del email de arriba se movió acá, al contenedor. */
+.sparkle-camera-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sparkle-camera-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Ícono "i" + tooltip (Etapa 65): tooltip oculto por default
+   (`opacity`/`visibility`, no `display`, para poder animar la transición),
+   revelado en hover O foco por teclado (`.sparkle-info-icon` es
+   `tabIndex={0}`) del ÍCONO, no del tooltip en sí — el tooltip tiene
+   `pointer-events: none` porque no necesita recibir interacción propia, solo
+   mostrarse. */
+.sparkle-info-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--sparkle-text-secondary);
+  cursor: help;
+}
+
+.sparkle-info-icon:hover .sparkle-tooltip,
+.sparkle-info-icon:focus-visible .sparkle-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.sparkle-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 200px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--sparkle-text-primary);
+  color: #ffffff;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 400;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity 0.15s var(--sparkle-easing), transform 0.15s var(--sparkle-easing);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Variantes del patrón de arriba (Ajuste post-entrega) — pedido explícito
+   posterior: tooltips explicativos en `screens/ConcentrationStats.jsx`
+   (métricas de "En esta sesión" y encabezado de la línea temporal). Mismo
+   patrón, mismas clases base — estas dos son solo overrides puntuales,
+   nunca tocan `.sparkle-info-icon`/`.sparkle-tooltip` en sí (así
+   `ui/CameraSwitch.jsx`, el otro consumidor, sigue exactamente igual). */
+
+/* `--inline`: el ícono va PEGADO al final de un texto corto (una etiqueta
+   de tile, un `.sparkle-section-label`), no en su propia fila como en
+   `CameraSwitch.jsx` — `display:flex` de la base es de bloque y cortaría
+   la línea; acá necesita `inline-flex` para quedar al lado del texto. */
+.sparkle-info-icon--inline {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+/* `--center`: la base ancla el tooltip a `left:0`, pensado para un ícono
+   pegado al borde izquierdo de una fila ancha. Acá el ícono vive dentro de
+   tiles angostas (`.sparkle-stat-tile`, ~140px) en cualquier columna de la
+   grilla de 2 — anclado a la izquierda, el tooltip se recortaría contra el
+   borde del panel en la columna derecha (`.sparkle-scroll-area` tiene
+   `overflow-x: hidden`). Centrado bajo el ícono y más angosto, el margen
+   de error queda parejo a los dos lados en vez de solo hacia la derecha. */
+.sparkle-tooltip--center {
+  left: 50%;
+  width: 170px;
+  transform: translateX(-50%) translateY(4px);
+}
+
+.sparkle-info-icon:hover .sparkle-tooltip.sparkle-tooltip--center,
+.sparkle-info-icon:focus-visible .sparkle-tooltip.sparkle-tooltip--center {
+  transform: translateX(-50%) translateY(0);
+}
+
+.sparkle-camera-switch-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.sparkle-camera-switch-track {
+  flex-shrink: 0;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--sparkle-border-strong);
+  transition: background-color 0.15s var(--sparkle-easing);
+}
+
+.sparkle-camera-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3);
+  transition: transform 0.15s var(--sparkle-easing);
+}
+
+.sparkle-camera-switch-input:checked ~ .sparkle-camera-switch-track {
+  background: var(--sparkle-primary);
+}
+
+.sparkle-camera-switch-input:checked ~ .sparkle-camera-switch-track .sparkle-camera-switch-thumb {
+  transform: translateX(14px);
+}
+
+.sparkle-camera-switch-input:focus-visible ~ .sparkle-camera-switch-track {
+  outline: 2px solid var(--sparkle-primary);
+  outline-offset: 2px;
+}
+
+.sparkle-camera-switch-label {
+  font-size: 11px;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Logo de Sparkle V2 (Ajuste post-entrega) — dos versiones sobre el mismo
+   contenedor de 26×26 (mismo tamaño/radio en ambas, para que sean
+   intercambiables sin afectar el alto de `.sparkle-header-row` ni el
+   centrado vertical con el resto de esa fila):
+     - `.sparkle-brand-icon` (default, la que usa `Header.jsx` hoy): ícono
+       blanco sobre celeste sólido — versión "fondo oscuro/azul".
+     - `.sparkle-brand-icon--light`: ícono azul sobre un celeste MUY claro
+       con borde sutil — versión "fondo claro", pensada para si el logo
+       llega a usarse en algún lugar sobre una superficie ya blanca sin
+       necesidad de un chip de color fuerte. Ninguna de las dos lleva
+       sombra — solo color plano, a propósito minimalista. */
+.sparkle-brand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--sparkle-radius);
+  background: var(--sparkle-primary);
+  color: #ffffff;
+}
+
+.sparkle-brand-icon--light {
+  background: var(--sparkle-primary-light);
+  border: 1px solid var(--sparkle-primary-light);
+  color: var(--sparkle-primary);
+}
+
+.sparkle-brand-name {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-brand-version {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--sparkle-primary);
+  background: var(--sparkle-primary-light);
+  padding: 2px 6px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+.sparkle-role-badge {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sparkle-text-secondary);
+  background: var(--sparkle-bg-subtle);
+  border: 1px solid var(--sparkle-border);
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+
+.sparkle-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sparkle-close-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  cursor: pointer;
+  transition: background-color 0.15s var(--sparkle-easing), color 0.15s var(--sparkle-easing);
+}
+
+.sparkle-close-button:hover {
+  background: var(--sparkle-bg-subtle);
+  color: var(--sparkle-text-primary);
+}
+
+/* Contenido */
+
+.sparkle-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 28px 22px;
+}
+
+.sparkle-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 24px;
+}
+
+.sparkle-screen-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+
+/* Spinner de carga inicial (App): mientras se resuelve el rol automático
+   antes de mostrar cualquier pantalla. */
+.sparkle-boot-loader {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.sparkle-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid var(--sparkle-border);
+  border-top-color: var(--sparkle-primary);
+  animation: sparkle-spin 0.7s linear infinite;
+}
+
+@keyframes sparkle-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sparkle-title {
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.3;
+  margin: 0;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-subtitle {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-text {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Tarjetas de selección de rol (Welcome) */
+
+.sparkle-role-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sparkle-role-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  background: var(--sparkle-bg-subtle);
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s var(--sparkle-easing), background-color 0.15s var(--sparkle-easing),
+    box-shadow 0.15s var(--sparkle-easing);
+}
+
+.sparkle-role-card:hover {
+  background: var(--sparkle-primary-light);
+  border-color: var(--sparkle-primary);
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 2px 6px 2px rgba(60, 64, 67, 0.15);
+}
+
+.sparkle-role-card:active {
+  box-shadow: none;
+}
+
+.sparkle-role-card:disabled {
+  opacity: 0.6;
+  cursor: default;
+  pointer-events: none;
+}
+
+.sparkle-role-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--sparkle-radius);
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  color: var(--sparkle-primary);
+}
+
+.sparkle-role-card-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sparkle-role-card-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-role-card-helper {
+  font-size: 12px;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-role-card-chevron {
+  flex-shrink: 0;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-text-error {
+  color: var(--sparkle-danger);
+}
+
+/* Mismo criterio que `.sparkle-text-error` pero para un requisito
+   pendiente, no un fallo (ej. "cargá el material antes de comenzar" en
+   `TeacherPanel.jsx`) — paleta ámbar, misma familia que
+   `--sparkle-warning*` ya usada en `.sparkle-attention-alert`. */
+.sparkle-text-warning {
+  color: var(--sparkle-warning);
+}
+
+/* Error de carga con acción de reintentar — usado por `TeacherPanel.jsx`
+   (historial de preguntas, padrón, estadísticas de alumnos) en vez de
+   dejar el error mostrado sin ninguna salida: cada pedido fallido queda con
+   su propio botón "Reintentar" chico, sin bloquear el resto de la pantalla. */
+.sparkle-inline-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sparkle-button-compact {
+  padding: 6px 12px;
+  font-size: 12px;
+  width: auto;
+}
+
+/* Botones de acción (PanelDocente) */
+
+.sparkle-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sparkle-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: var(--sparkle-radius);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s var(--sparkle-easing), border-color 0.15s var(--sparkle-easing),
+    box-shadow 0.15s var(--sparkle-easing);
+}
+
+.sparkle-button-primary {
+  background: var(--sparkle-primary);
+  color: #ffffff;
+  border: 1px solid transparent;
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+}
+
+.sparkle-button-primary:hover {
+  background: var(--sparkle-primary-hover);
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 2px 6px 2px rgba(60, 64, 67, 0.15);
+}
+
+.sparkle-button-primary:active {
+  background: var(--sparkle-primary-active);
+  box-shadow: none;
+}
+
+.sparkle-button-secondary {
+  background: #ffffff;
+  color: var(--sparkle-primary);
+  border: 1px solid var(--sparkle-border);
+}
+
+.sparkle-button-secondary:hover {
+  background: var(--sparkle-primary-light);
+  border-color: var(--sparkle-primary-light);
+}
+
+.sparkle-button-secondary:active {
+  background: #d2e3fc;
+}
+
+.sparkle-button-danger {
+  background: #ffffff;
+  color: var(--sparkle-danger);
+  border: 1px solid var(--sparkle-border);
+}
+
+.sparkle-button-danger:hover {
+  background: #fce8e6;
+  border-color: var(--sparkle-danger);
+}
+
+.sparkle-button-danger:active {
+  background: #fad2cf;
+}
+
+/* Estado deshabilitado COMÚN a cualquier `.sparkle-button` (docente:
+   "Generar pregunta" mientras hay una activa; alumno: "Enviar respuesta"
+   sin opción elegida/enviando/vencida/ya respondida) — una sola regla
+   reutilizada en vez de un estilo por botón, así ambos quedan siempre
+   consistentes. Se engancha tanto al `:disabled` nativo (los tres botones
+   reales usan `<button disabled>`) como a `.is-disabled` por si algún caso
+   futuro necesita el mismo look sin el atributo HTML.
+   Especificidad a propósito: `.sparkle-button:disabled` (0,2,0) ya le gana
+   a `.sparkle-button-primary`/`-danger`/`-secondary` (0,1,0) sin importar
+   el orden en la hoja. Para el `:hover` hace falta ir a 3 clases
+   (`.sparkle-button:disabled:hover`, 0,3,0) porque
+   `.sparkle-button-tertiary:hover` (más abajo en este archivo) también es
+   (0,2,0) — con solo 2 clases el orden de aparición decidiría, y
+   `-tertiary` está declarado después. */
+.sparkle-button:disabled,
+.sparkle-button.is-disabled {
+  background: var(--sparkle-bg-subtle);
+  color: var(--sparkle-text-secondary);
+  border-color: var(--sparkle-border);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.sparkle-button:disabled:hover,
+.sparkle-button.is-disabled:hover {
+  background: var(--sparkle-bg-subtle);
+  color: var(--sparkle-text-secondary);
+  border-color: var(--sparkle-border);
+  box-shadow: none;
+}
+
+.sparkle-button:disabled:active,
+.sparkle-button.is-disabled:active {
+  background: var(--sparkle-bg-subtle);
+  box-shadow: none;
+}
+
+/* Vista de "clase en curso" (PanelDocente): shell propio de 3 franjas —
+   topbar fija arriba, contenido con scroll propio en el medio, acciones
+   fijas abajo — en vez del `.sparkle-screen` de una sola columna que scrollea
+   entero (compartido por el resto de las vistas). Así la topbar (badge +
+   tabs) y las acciones de pie ("Generar pregunta"/"Detener Clase") quedan
+   SIEMPRE visibles sin importar cuánto contenido haya en el medio, sin
+   tocar el layout de ninguna otra pantalla. */
+.sparkle-screen--live {
+  min-height: 0;
+  gap: 0;
+}
+
+.sparkle-panel-topbar {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--sparkle-border);
+}
+
+/* `padding` + `margin` negativo simétricos a propósito (Ajuste post-entrega
+   — las sombras de las tarjetas se cortaban feo al hacer scroll): antes este
+   contenedor tenía padding horizontal 0, así que las tarjetas quedaban
+   pegadas a su propio borde de recorte (`overflow-y: auto` recorta también
+   en X) y el `box-shadow` no tenía dónde "sangrar" — se veía cortado incluso
+   en reposo, no solo durante el scroll. El margen negativo widen-ea la caja
+   de este elemento hacia el padding YA existente (y hoy vacío) de
+   `.sparkle-content` (22px) sin gastar espacio nuevo, y el padding positivo
+   trae el contenido de vuelta a la MISMA posición horizontal de siempre —
+   la tarjeta no se mueve un píxel, pero ahora el recorte del scroll vive
+   16px más afuera, dejando lugar de sobra para la sombra. Igual criterio
+   arriba/abajo, pero ahí no hay padding "prestado" de otro elemento (el
+   topbar/footer no son parte de este contenedor con scroll), así que ese
+   espacio es genuino, no compensado con margen negativo. */
+.sparkle-scroll-area {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px 16px;
+  margin: 0 -16px;
+}
+
+/* Scrollbar propia, fina y discreta (Chrome-only, es una extensión — sin
+   necesidad de fallback cross-browser): además de verse más prolija, deja
+   previsible cuánto espacio realmente ocupa dentro del padding de arriba
+   (6px), a diferencia de la scrollbar nativa por default del SO. */
+.sparkle-scroll-area::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sparkle-scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sparkle-scroll-area::-webkit-scrollbar-thumb {
+  background: var(--sparkle-border-strong);
+  border-radius: 999px;
+}
+
+.sparkle-scroll-area::-webkit-scrollbar-thumb:hover {
+  background: var(--sparkle-text-secondary);
+}
+
+.sparkle-sticky-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--sparkle-border);
+}
+
+/* Modal de confirmación de "Detener Clase" — a diferencia de "Generar
+   pregunta"/"Ver estadísticas" (pasaron a pantalla propia), esto SÍ es un
+   modal a propósito: es una confirmación puntual de sí/no, no una vista con
+   contenido propio. `position: absolute; inset: 0` toma como referencia a
+   `.sparkle-panel` (el ancestro `position: fixed` más cercano), así que
+   cubre el panel entero sin importar en qué nivel de `.sparkle-screen` se
+   monte. */
+
+.sparkle-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(32, 33, 36, 0.4);
+  z-index: 20;
+}
+
+.sparkle-confirm-dialog {
+  width: 100%;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+}
+
+.sparkle-confirm-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-confirm-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-confirm-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Badge de estado de la clase (PanelDocente, topbar) — Ajuste post-entrega:
+   unifica "clase en curso" y "clase detenida" en la misma vista, así que
+   esto es lo único que cambia arriba de todo para distinguirlas de un
+   vistazo. "Activa" reutiliza el verde de éxito ya establecido en el resto
+   de Sparkle; "detenida" usa gris neutro (no rojo) a propósito — detener la
+   clase es una acción intencional del docente, no un error. */
+
+/* Ajuste post-entrega — las dos pastillas de arriba NUNCA deben partirse en
+   dos filas: `flex-wrap: nowrap` es la regla que lo garantiza (antes tenía
+   `wrap`, que es justo lo que dejaba "romper" la fila cuando el texto era
+   largo, ej. contadores de 2-3 dígitos). El estado ("Clase en curso/
+   detenida") es el más chico de las dos y tiene solo dos valores fijos y
+   cortos — por eso NUNCA se achica (`flex-shrink: 0` en su propia clase, más
+   abajo): siempre debe leerse completo. La de "alumnos en línea" es la de
+   longitud variable (el contador puede crecer), así que es la que cede
+   espacio si hace falta — ver `.sparkle-connected-badge-wrap` y
+   `.sparkle-connected-badge-label` un poco más abajo, que son los que
+   realmente pueden achicarse/recortarse con "…" como último recurso (nunca
+   debería hacer falta en la práctica, con los tamaños ya ajustados acá,
+   pero está ahí para no romper el layout ante un caso extremo). */
+.sparkle-topbar-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.sparkle-class-status-badge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.sparkle-class-status-badge--active {
+  background: rgba(52, 168, 83, 0.12);
+  color: var(--sparkle-success);
+}
+
+.sparkle-class-status-badge--paused {
+  background: var(--sparkle-bg-subtle);
+  border-color: var(--sparkle-border);
+  color: var(--sparkle-text-secondary);
+}
+
+/* Reporte PDF de fin de clase — pedido explícito: tiene que sentirse parte
+   de la MISMA familia visual que el resto de los botones primarios del
+   panel ("Comenzar Clase", "Generar pregunta") — mismo color, mismo radio,
+   misma sombra Material sutil, misma transición —, no un elemento inventado
+   aparte. Por eso este modificador NO pisa `background`/`box-shadow`/
+   `border-radius`/`transition`: los hereda tal cual de `.sparkle-button`/
+   `.sparkle-button-primary` (ver más arriba), incluidos sus propios
+   `:hover`/`:active`/`:disabled` sin ningún override adicional acá. Lo
+   único que cambia es el tamaño — más padding, tipografía más grande y un
+   poco más de peso — para que tenga más presencia física como la CTA
+   principal de la pantalla, sin dejar de leerse como un botón más del
+   mismo sistema. */
+.sparkle-report-download-button {
+  gap: 10px;
+  padding: 16px 20px;
+  font-size: 16px;
+  font-weight: 600;
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  border-radius: calc(var(--sparkle-radius) + 2px);
+  letter-spacing: 0.01em;
+}
+
+.sparkle-class-status-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Badge "N alumnos en línea" + popover con nombres (PanelDocente, topbar) */
+
+.sparkle-connected-badge-wrap {
+  position: relative;
+  align-self: flex-start;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.sparkle-connected-badge {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: var(--sparkle-bg-subtle);
+  border: 1px solid var(--sparkle-border);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sparkle-text-secondary);
+  cursor: pointer;
+  transition: border-color 0.15s var(--sparkle-easing), background-color 0.15s var(--sparkle-easing);
+}
+
+/* Único elemento que realmente recorta con "…" si el espacio disponible no
+   alcanzase — el resto del badge (el punto de estado) queda siempre
+   `flex-shrink: 0` y visible entero. */
+.sparkle-connected-badge-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sparkle-connected-badge:hover {
+  border-color: var(--sparkle-border-strong);
+}
+
+.sparkle-connected-badge-active {
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  min-width: 220px;
+  max-width: 260px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 8px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 12px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 12px 2px rgba(60, 64, 67, 0.15);
+  z-index: 8;
+  animation: sparkle-popover-in 0.14s var(--sparkle-easing);
+}
+
+@keyframes sparkle-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sparkle-popover-empty {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sparkle-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--sparkle-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sparkle-popover-item:hover {
+  background: var(--sparkle-bg-subtle);
+}
+
+.sparkle-popover-item-icon {
+  flex-shrink: 0;
+  display: flex;
+  color: var(--sparkle-text-secondary);
+}
+
+/* CTA "Ver estadísticas de concentración" (PanelDocente, tab General) —
+   deliberadamente más llamativo que el resto de los botones (degradé propio
+   en vez de la paleta plana de `.sparkle-button-*`), para destacarlo como la
+   pieza más importante de la tab. */
+
+.sparkle-insight-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #1a73e8 0%, #7c4dff 100%);
+  color: #ffffff;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 4px 14px 0 rgba(26, 115, 232, 0.35);
+  transition: transform 0.15s var(--sparkle-easing), box-shadow 0.15s var(--sparkle-easing);
+}
+
+.sparkle-insight-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px 0 rgba(26, 115, 232, 0.4);
+}
+
+.sparkle-insight-button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 8px 0 rgba(26, 115, 232, 0.35);
+}
+
+.sparkle-insight-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.sparkle-insight-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sparkle-insight-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.sparkle-insight-helper {
+  font-size: 11px;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.sparkle-insight-arrow {
+  flex-shrink: 0;
+  margin-left: auto;
+  opacity: 0.85;
+}
+
+/* Listado de preguntas realizadas (PanelDocente, tab General) */
+
+.sparkle-question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* Corrección — la tarjeta en vivo/recién finalizada vive en su PROPIO
+     `.sparkle-question-list` (un solo ítem), separado del historial de
+     preguntas ya finalizadas (otro `.sparkle-question-list` aparte, ver
+     `TeacherPanel.jsx`) — necesario para que la tarjeta en vivo no
+     dependa de que el historial ya haya terminado de cargar. El `gap` de
+     acá arriba solo separa ítems DENTRO de un mismo listado, así que sin
+     este margen los dos listados quedaban pegados entre sí (o pegados al
+     texto de carga/error/vacío que va en el medio) — mismo valor que ese
+     `gap` para mantener el mismo ritmo visual en toda la sección. */
+  margin-bottom: 14px;
+}
+
+.sparkle-question-card-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sparkle-primary);
+}
+
+.sparkle-status-chip-closed {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--sparkle-bg-subtle);
+  color: var(--sparkle-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sparkle-answer-marker {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--sparkle-border-strong);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Padrón completo de alumnos (PanelDocente, tab Alumnos) — a diferencia del
+   badge de la topbar (solo conectados AHORA), acá aparecen todos, con su
+   estado individual. */
+
+.sparkle-roster-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sparkle-roster-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+  transition: border-color 0.15s var(--sparkle-easing), box-shadow 0.15s var(--sparkle-easing);
+}
+
+.sparkle-roster-item:hover {
+  border-color: var(--sparkle-border-strong);
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.15);
+}
+
+.sparkle-roster-avatar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--sparkle-primary-light);
+  color: var(--sparkle-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sparkle-roster-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sparkle-roster-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sparkle-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sparkle-roster-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-roster-status-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--sparkle-border-strong);
+}
+
+.sparkle-roster-status--online .sparkle-roster-status-dot {
+  background: var(--sparkle-success);
+  box-shadow: 0 0 0 3px rgba(52, 168, 83, 0.16);
+}
+
+/* Progreso de preguntas por alumno, debajo del estado — tipografía
+   secundaria (mismo tamaño/color que `.sparkle-roster-status`) para no
+   competir visualmente con el nombre ni el estado de conexión. */
+.sparkle-roster-progress {
+  font-size: 11px;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Tabs "General"/"Alumnos" (PanelDocente, clase activa) */
+
+.sparkle-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--sparkle-bg-subtle);
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+}
+
+.sparkle-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border: none;
+  border-radius: calc(var(--sparkle-radius) - 2px);
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s var(--sparkle-easing), color 0.15s var(--sparkle-easing),
+    box-shadow 0.15s var(--sparkle-easing);
+}
+
+.sparkle-tab:hover {
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-tab--active {
+  background: #ffffff;
+  color: var(--sparkle-primary);
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
+}
+
+.sparkle-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Tarjeta de "pregunta realizada" (PanelDocente, tab General) */
+
+.sparkle-question-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 2px 6px 2px rgba(60, 64, 67, 0.15);
+}
+
+/* Resalte breve de la tarjeta recién enviada (`TeacherPanel.jsx`, ver
+   `handleQuestionSent`) — un anillo azul que aparece y se desvanece solo,
+   sobre el mismo `box-shadow` de reposo (nunca lo reemplaza, se anima
+   ADEMÁS de él) para que el docente ubique de un vistazo cuál pregunta
+   acaba de mandar apenas `scrollIntoView` la trae a la vista. Se agrega/
+   quita por JS (clase efímera, ~1.6s) — la animación en sí también corre
+   una sola vez (sin `infinite`), así que aunque la clase tardara en
+   sacarse ya habría terminado de desvanecerse sola. */
+.sparkle-question-card--highlight {
+  animation: sparkle-question-card-highlight 1.6s var(--sparkle-easing);
+}
+
+@keyframes sparkle-question-card-highlight {
+  0% {
+    box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 2px 6px 2px rgba(60, 64, 67, 0.15),
+      0 0 0 3px rgba(26, 115, 232, 0.45);
+  }
+  100% {
+    box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 2px 6px 2px rgba(60, 64, 67, 0.15),
+      0 0 0 3px rgba(26, 115, 232, 0);
+  }
+}
+
+/* Corrección — fila propia para el eyebrow ("Pregunta en vivo"/"Pregunta
+   N") y el contador/chip de estado, ARRIBA del título — antes compartían
+   fila con el título (`.sparkle-question-card-head`, `justify-content:
+   space-between`), así que el título quedaba angosto compitiendo por
+   ancho con el badge. Con el título en su PROPIA fila (ver
+   `.sparkle-question-card-title` más abajo, ya no dentro de este row), su
+   ancho no depende en nada del contador. */
+.sparkle-question-card-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sparkle-question-card-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--sparkle-text-primary);
+  overflow-wrap: break-word;
+}
+
+.sparkle-question-card-subtitle {
+  margin: 2px 0 0 0;
+  font-size: 12px;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Barra de progreso del temporizador — ver el bloque compartido
+   `.sparkle-timer-progress-*` más abajo (junto a `.sparkle-timer-ring`):
+   una sola definición para el alumno (`LiveQuestionModal`) y el docente
+   (`QuestionCard.jsx`, SOLO `isLive`, tamaño "lg"). */
+
+/* Corrección — salto visual al finalizar una pregunta: `QuestionCard.jsx`
+   ahora anima el COLAPSO de este espacio en vez de sacarlo de golpe del
+   layout (`{isLive && <TimerProgressBar/>}` de antes). Truco de
+   `grid-template-rows` (`0fr` ↔ `1fr`, con `min-height: 0` en el hijo
+   directo) en vez de animar `height`/`max-height`: a diferencia de esas dos,
+   funciona sin necesitar adivinar de antemano una altura fija en píxeles —
+   la barra real (`.sparkle-timer-progress-track--lg`, 12px) define su
+   propia altura, y la transición igual llega a animar suave desde/hacia
+   cero. `opacity` de acompañamiento evita que el contenido se vea
+   "aplastado" a mitad de la animación, mientras todavía tiene algo de alto. */
+.sparkle-question-card-timer-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 280ms var(--sparkle-easing), opacity 200ms var(--sparkle-easing);
+}
+
+.sparkle-question-card-timer-wrap--expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.sparkle-question-card-timer-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sparkle-timer-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  /* Ancho mínimo fijo + `tabular-nums` (Corrección — evitar saltos de
+     layout): sin esto, el badge en sí se angosta/ensancha un par de
+     pixeles cuando el número de segundos pasa de dos dígitos a uno (ej.
+     "10" → "9") y las cifras de una fuente no-monoespaciada no ocupan
+     todas el mismo ancho — con el título ya en su propia fila (ver
+     arriba) eso ya no afecta al título, pero el badge mismo seguía
+     "temblando" contra el borde derecho de la tarjeta en cada tick del
+     contador. */
+  min-width: 118px;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--sparkle-warning-light);
+  color: var(--sparkle-warning);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sparkle-answer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sparkle-answer-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sparkle-answer-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sparkle-answer-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-badge-correct {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(52, 168, 83, 0.12);
+  color: var(--sparkle-success);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Contraparte de `.sparkle-badge-correct` — historial de preguntas
+   respondidas del alumno (`StudentPanel.jsx`), cuando la eligió estuvo mal. */
+.sparkle-badge-incorrect {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(217, 48, 37, 0.12);
+  color: var(--sparkle-danger);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Tercer estado — pregunta salteada ("Prefiero no responder" en
+   `StudentPanel.jsx`): ni correcta ni incorrecta, tono neutro a propósito
+   (no eligió nada, no hay nada que penalizar). */
+.sparkle-badge-neutral {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--sparkle-bg-subtle);
+  color: var(--sparkle-text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sparkle-answer-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sparkle-progress-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--sparkle-bg-subtle);
+  border: 1px solid var(--sparkle-border);
+  overflow: hidden;
+}
+
+.sparkle-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--sparkle-primary);
+  transition: width 0.2s var(--sparkle-easing);
+}
+
+.sparkle-progress-fill--correct {
+  background: var(--sparkle-success);
+}
+
+.sparkle-answer-percent {
+  flex-shrink: 0;
+  min-width: 32px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Pantalla "Generar pregunta" (`screens/GenerateQuestion.jsx`) — cabecera:
+   eyebrow + título grande a la izquierda, anillo de tiempo a la derecha. */
+
+.sparkle-generate-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sparkle-generate-title {
+  margin: 4px 0 0 0;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-timer-ring {
+  position: relative;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+}
+
+.sparkle-timer-ring svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.sparkle-timer-ring-track {
+  fill: none;
+  stroke: var(--sparkle-bg-subtle);
+  stroke-width: 3;
+}
+
+.sparkle-timer-ring-progress {
+  fill: none;
+  stroke: var(--sparkle-warning);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.25s var(--sparkle-easing);
+}
+
+.sparkle-timer-ring-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sparkle-text-primary);
+}
+
+/* Barra de progreso horizontal del temporizador (`ui/TimerProgressBar.jsx`)
+   — ÚNICA definición compartida por el alumno (`LiveQuestionModal`, junto
+   al anillo de arriba: mismo `secondsLeft`/`question.durationSeconds`,
+   nunca un segundo timer) y el docente (`QuestionCard.jsx`, junto al chip
+   "Quedan Xs"). Solo el tamaño (`--md`/`--lg`) difiere entre ambos — toda
+   la lógica de color/pulso es una sola, ver `getTimerBarStage` en ese
+   archivo.
+   - Más del 50% del tiempo: color principal (`--normal`, azul).
+   - Entre 50% y 25%: ámbar/naranja (`--warning`).
+   - 25% o menos: rojo (`--danger`).
+   La transición de `background-color` (no solo `width`) es lo que hace
+   que el cambio de color entre franjas se vea GRADUAL, nunca un salto
+   brusco, aunque el corte en sí sea por umbrales discretos. */
+.sparkle-timer-progress-track {
+  width: 100%;
+  border-radius: 999px;
+  background: var(--sparkle-bg-subtle);
+  overflow: hidden;
+}
+
+.sparkle-timer-progress-track--md {
+  height: 8px;
+}
+
+.sparkle-timer-progress-track--lg {
+  height: 12px;
+}
+
+.sparkle-timer-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--sparkle-primary);
+  transition: width 0.25s linear, background-color 0.5s var(--sparkle-easing);
+}
+
+.sparkle-timer-progress-fill--warning {
+  background: var(--sparkle-warning);
+}
+
+.sparkle-timer-progress-fill--danger {
+  background: var(--sparkle-danger);
+}
+
+/* Últimos 5 segundos reales (no un porcentaje — ver `getTimerBarStage`) —
+   pulso sutil de opacidad SUMADO a un resplandor (`box-shadow`) que le da
+   más intensidad visual en el pico del pulso, sin llegar a ser invasivo.
+   Nunca se aplica en 0 exacto: al llegar a cero la barra queda vacía
+   (`width: 0%`, ver el componente) y esta clase directamente no se agrega
+   — sin animación activa. */
+.sparkle-timer-progress-fill--pulsing {
+  animation: sparkle-timer-progress-pulse 1s ease-in-out infinite;
+}
+
+@keyframes sparkle-timer-progress-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(217, 48, 37, 0);
+  }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 8px 1px rgba(217, 48, 37, 0.5);
+  }
+}
+
+/* Selector de tiempo (`GenerateQuestion.jsx`) — chips de presets (únicas
+   duraciones posibles, ver `TIME_PRESETS` ahí — el campo de duración a
+   medida se eliminó); comparten el mismo lenguaje visual que
+   `.sparkle-tab`/`.sparkle-option` (pill neutra, se resalta en azul cuando
+   está activa). */
+
+.sparkle-time-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sparkle-time-chip {
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--sparkle-border);
+  background: #ffffff;
+  color: var(--sparkle-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s var(--sparkle-easing), background-color 0.15s var(--sparkle-easing),
+    color 0.15s var(--sparkle-easing);
+}
+
+.sparkle-time-chip:hover {
+  border-color: var(--sparkle-border-strong);
+}
+
+.sparkle-time-chip--active {
+  background: var(--sparkle-primary-light);
+  border-color: var(--sparkle-primary);
+  color: var(--sparkle-primary);
+}
+
+/* Pantalla "Concentración de la clase" (`screens/ConcentrationStats.jsx`) —
+   lista real de alumnos con la cámara activa (`attentionRoster`, ver
+   `hooks/useLiveAttention.js`), identificados solo por una etiqueta
+   ("Alumno N") — nunca su nombre/email real, ver el comentario de ese
+   archivo para el detalle completo de privacidad. */
+
+/* Corrección — pedido explícito posterior: reemplaza `.sparkle-tab-content`
+   (16px de gap, compartido con TODAS las demás pantallas del panel) por un
+   contenedor propio de esta pantalla, con más aire ENTRE secciones (24px)
+   — este panel tiene muchas más secciones apiladas que el resto (trigger,
+   3 tiles, 2 gráficos, momento, 3 tiles más), así que necesitaba más
+   separación para leerse "prolijo" sin volverse un bloque compacto de
+   arriba a abajo. Cambiar esto acá NO afecta ninguna otra pantalla —
+   `.sparkle-tab-content` sigue intacto para todas las demás. */
+.sparkle-concentration-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Cada sección (`<section>` en el JSX) es su propio grupo título+contenido
+   — `gap: 10px` entre el label y lo que sigue (tiles, tarjeta de gráfico,
+   tarjeta de momento), en vez del `margin-bottom: 8px` propio de
+   `.sparkle-section-label` (se anula acá abajo para no sumar los dos
+   espacios): mismo criterio que `.sparkle-section-head-row
+   .sparkle-section-label` un poco más abajo en este archivo. */
+.sparkle-concentration-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sparkle-concentration-group .sparkle-section-label {
+  margin-bottom: 0;
+}
+
+.sparkle-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.sparkle-stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+}
+
+.sparkle-stat-tile-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-stat-tile-value {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-stat-tile-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sparkle-stat-tile-delta--down {
+  color: var(--sparkle-danger);
+}
+
+/* Trigger de hover "Alumnos monitoreados por IA" (`ConcentrationStats.jsx`)
+   — reemplaza al viejo botón de click "Mostrar/Ocultar alumnos" (Ajuste
+   post-entrega). Pill con ícono + label + contador, mismo lenguaje visual
+   que `.sparkle-insight-button`. El popover (`.sparkle-attention-popover`,
+   más abajo) es un elemento HERMANO, no un hijo — `position: fixed`,
+   posicionado a mano en JS (`calcularPosicionPopover`), no un reveal CSS
+   anidado (Corrección — pedido explícito: el reveal anidado anterior
+   quedaba mal al abrir hacia abajo, empujando el resto del contenido).
+   `--activo` es la única clase que controla el resaltado (ya no
+   `:hover`/`:focus-within` en CSS puro — el estado real vive en JS,
+   `popoverAbierto`, para poder coordinarlo con el popover flotante). */
+/* Con más presencia que el resto de las tarjetas del panel (pedido
+   explícito) — fondo con un leve gradiente sobre `--sparkle-primary-light`
+   (no un color plano, para que siga leyéndose "prolijo" y no como una
+   alerta) + acento sólido a la izquierda, en vez del blanco liso +
+   `border` gris que usan `.sparkle-stat-tile`/`.sparkle-heatmap-card`. Es a
+   propósito el único elemento de la pantalla con esta jerarquía visual —
+   el resto de las tarjetas se queda neutro para no competir con él. */
+.sparkle-attention-trigger {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 10px 14px;
+  background: var(--sparkle-primary-light);
+  border: 1px solid rgba(26, 115, 232, 0.28);
+  border-left: 3px solid var(--sparkle-primary);
+  border-radius: var(--sparkle-radius);
+  cursor: default;
+  transition: border-color 150ms var(--sparkle-easing), box-shadow 150ms var(--sparkle-easing);
+}
+
+.sparkle-attention-trigger--activo {
+  border-color: var(--sparkle-primary);
+  box-shadow: 0 2px 6px 0 rgba(26, 115, 232, 0.22);
+}
+
+.sparkle-attention-trigger-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Ícono en pastilla sólida (antes solo el glifo suelto, color primario) —
+   más peso visual, mismo lenguaje que un ícono "con marca" en vez de un
+   ícono de UI neutro. */
+.sparkle-attention-trigger-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--sparkle-primary);
+  color: #ffffff;
+}
+
+.sparkle-attention-trigger-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--sparkle-text-primary);
+}
+
+/* Contador — el dato que más importa de un vistazo, así que es el elemento
+   con MÁS contraste de toda la tarjeta (pastilla sólida azul + texto
+   blanco), no un badge gris discreto como el resto de los contadores del
+   panel (ej. `.sparkle-class-status-badge`). */
+.sparkle-attention-trigger-count {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--sparkle-primary);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 1px 2px 0 rgba(26, 115, 232, 0.35);
+}
+
+/* Popover flotante de alumnos — `position: fixed` con `top`/`bottom`/
+   `left`/`right`/`width`/`maxHeight` calculados en JS
+   (`calcularPosicionPopover`, `ConcentrationStats.jsx`) según el espacio
+   disponible contra el borde del PANEL (no del viewport — ver el comentario
+   grande de ese archivo sobre por qué `.sparkle-panel`, con su `transform`,
+   es el contenedor real de cualquier `position: fixed` de acá adentro).
+   Mismo par de sombras que `.sparkle-attention-settings-drawer` (el otro
+   popover flotante de esta app) para que se vea como un popover real, no un
+   dropdown pegado al botón — bordes definidos + sombra con difusión, nunca
+   solo un `border`. */
+.sparkle-attention-popover {
+  position: fixed;
+  z-index: 20;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 12px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+  padding: 10px 12px;
+  overflow-y: auto;
+  animation: sparkle-attention-popover-in 120ms var(--sparkle-easing);
+}
+
+@keyframes sparkle-attention-popover-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.sparkle-attention-popover-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-attention-popover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sparkle-attention-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--sparkle-border);
+}
+
+.sparkle-attention-popover-row:first-child {
+  border-top: none;
+}
+
+.sparkle-attention-popover-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sparkle-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sparkle-attention-popover-value {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Badge de estado atento/desatento — mismo lenguaje visual que
+   `.sparkle-class-status-badge` (fondo tenue del color de estado + texto en
+   ese mismo color), clasificado siempre vía Y (ver `esAtento` en
+   `ConcentrationStats.jsx`), nunca un campo `desatento` ajeno. */
+.sparkle-badge-estado {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sparkle-badge-estado--atento {
+  background: rgba(52, 168, 83, 0.12);
+  color: var(--sparkle-success);
+}
+
+.sparkle-badge-estado--desatento {
+  background: rgba(217, 48, 37, 0.1);
+  color: var(--sparkle-danger);
+}
+
+/* Badge "Demo" — marca secciones sin fuente de datos real todavía (ver el
+   comentario grande en `ConcentrationStats.jsx`). Mismo patrón visual que
+   `.sparkle-badge-neutral` (tono gris, nunca de estado — "esto es
+   provisorio", no "bien/mal/atención"), para que se note pero no compita
+   visualmente con los números reales. */
+.sparkle-badge-demo {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--sparkle-bg-subtle);
+  color: var(--sparkle-text-secondary);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+/* Fila título + badge del encabezado de `RecoverySummary.jsx` — la ÚNICA
+   pantalla que necesita un badge PEGADO al `<h1 class="sparkle-title">`
+   (el resto de las pantallas, `ClassSummary.jsx` incluida, usa el título
+   solo). `.sparkle-screen-head` ya es `flex-direction: column`, así que
+   esto es uno de sus hijos, en fila. */
+.sparkle-screen-head-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Badge "En vivo" — mismo tamaño/forma que `.sparkle-badge-demo` (pastilla
+   chica, mayúsculas), pero en el tinte azul primario (nunca gris): a
+   diferencia de "Demo" (que marca contenido MOCK), esto es una función
+   real — distingue este resumen ACOTADO A MINUTOS, pedido en cualquier
+   momento de la clase, del resumen de fin de clase (`ClassSummary.jsx`,
+   sin badge propio, disponible recién cuando termina). */
+.sparkle-badge-recovery {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--sparkle-primary-light);
+  color: var(--sparkle-primary);
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+.sparkle-section-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+/* Esta fila reemplaza el margen que `.sparkle-section-label` ya trae por su
+   cuenta cuando NO va acompañado de un badge — se anula acá para no
+   duplicar espacio. */
+.sparkle-section-head-row .sparkle-section-label {
+  margin-bottom: 0;
+}
+
+/* Tarjeta contenedora compartida por los dos gráficos
+   (`ui/AttentionHeatmap.jsx`/`ui/AttentionTimeline.jsx`) — MISMA receta que el
+   resto de tarjetas de este panel (`.sparkle-momento-card`): fondo blanco
+   sólido, borde sutil, mismo radio que el resto de Sparkle. */
+.sparkle-grafico-card {
+  padding: 12px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+}
+
+/* Línea temporal (`ui/AttentionTimeline.jsx`, `Line` de `react-chartjs-2`) —
+   leyenda, tooltip, ejes y anotación del umbral se dibujan TODOS adentro
+   del canvas vía `options` de Chart.js, así que no hace falta CSS propio
+   para nada de eso. El canvas en sí no tiene fondo ni borde propios
+   (Chart.js lo deja transparente por defecto), así que se ve continuo con
+   el blanco/borde de `.sparkle-grafico-card`. `responsive: true` (`options`
+   del componente) — el canvas sigue el ANCHO de `.sparkle-linea3`, que el
+   componente agranda con `style={{width}}` a medida que crecen los puntos
+   (ver el comentario de `WIDTH_PER_POINT` en `AttentionTimeline.jsx`) — por
+   eso el `overflow-x: auto` vive en el contenedor DE AFUERA
+   (`.sparkle-linea3-scroll`), que es el que se queda con el ancho real de
+   la tarjeta y scrollea cuando el gráfico de adentro es más ancho que él.
+   Scrollbar fina, mismo criterio que `.sparkle-scroll-area` (vertical) más
+   arriba en este archivo. */
+.sparkle-linea3-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.sparkle-linea3-scroll::-webkit-scrollbar {
+  height: 5px;
+}
+
+.sparkle-linea3-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sparkle-linea3-scroll::-webkit-scrollbar-thumb {
+  background: var(--sparkle-border-strong);
+  border-radius: 999px;
+}
+
+.sparkle-linea3 {
+  position: relative;
+  height: 180px;
+}
+
+/* Mapa de calor (`ui/AttentionHeatmap.jsx`) — grilla de celdas en CSS puro
+   (nunca fue un canvas, a diferencia de la línea temporal de arriba):
+   `flex-wrap` hace que las celdas fluyan de izquierda a derecha y bajen de
+   fila solas si no entran todas en el ancho de la tarjeta, sin necesidad
+   de calcular columnas a mano. Tamaño fijo por celda — el color (fondo Y
+   texto, por contraste) es lo único dinámico, y se aplica inline desde el
+   componente porque depende de `pctAtentos` de cada franja. */
+.sparkle-heatmap3 {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sparkle-heatmap-celda {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.sparkle-heatmap-celda-etiqueta {
+  font-size: 9px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+/* Corrección — pedido explícito posterior: adentro mostraba un porcentaje
+   corto ("72%"); ahora es una hora con unidad ("22:40 hs", más largo) — se
+   baja el tamaño de fuente para que siga entrando en una sola línea dentro
+   de la celda de 56px fijos, sin desbordarse. */
+.sparkle-heatmap-celda-valor {
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Estado vacío de los dos gráficos de arriba — antes de que llegue el
+   primer snapshot (histórico o en vivo, ver `hooks/useAttentionHistory.js`).
+   `.sparkle-heatmap3` ya no tiene un alto fijo propio (es una grilla, no un
+   canvas), así que este estado fija uno acá para que la tarjeta no quede
+   con altura cero mientras no hay datos. */
+.sparkle-grafico-vacio {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 16px;
+  min-height: 120px;
+}
+
+/* Texto descriptivo debajo de cada gráfico (`AttentionTimeline.jsx`,
+   `AttentionHeatmap.jsx`) — mismo estilo que `.sparkle-text`, con margen
+   propio para separarlo del gráfico de arriba. */
+.sparkle-grafico-descripcion {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--sparkle-text-secondary);
+}
+
+/* "Momento de mayor desatención" — card simple, mismo tono de aviso que el
+   resto de Sparkle (warning, no danger: es informativo, no una alarma
+   activa). */
+.sparkle-momento-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+}
+
+.sparkle-momento-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  margin-top: 1px;
+  background: var(--sparkle-warning-light);
+  color: var(--sparkle-warning);
+}
+
+.sparkle-momento-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sparkle-momento-etiqueta {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-momento-detalle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sparkle-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--sparkle-bg-subtle);
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+  font: inherit;
+  font-size: 13px;
+  color: var(--sparkle-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s var(--sparkle-easing), background-color 0.15s var(--sparkle-easing);
+}
+
+.sparkle-option:hover {
+  border-color: var(--sparkle-primary);
+}
+
+/* Vista previa de "Generar pregunta" (`GenerateQuestion.jsx`): opciones
+   NO interactivas (docente no puede "elegir" una respuesta acá, ver ese
+   archivo) — anula el hover/cursor de `.sparkle-option` de arriba, y en su
+   lugar resalta cuál es la correcta con el mismo verde que `.sparkle-badge-
+   correct`. */
+.sparkle-option--static {
+  cursor: default;
+}
+
+.sparkle-option--static:hover {
+  border-color: var(--sparkle-border);
+}
+
+.sparkle-option--correct {
+  background: rgba(52, 168, 83, 0.08);
+  border-color: var(--sparkle-success);
+}
+
+.sparkle-option-marker {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--sparkle-border-strong);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--sparkle-text-secondary);
+  transition: border-color 0.15s var(--sparkle-easing), background-color 0.15s var(--sparkle-easing),
+    color 0.15s var(--sparkle-easing);
+}
+
+.sparkle-option--correct .sparkle-option-marker {
+  border-color: var(--sparkle-success);
+  background: var(--sparkle-success);
+  color: #ffffff;
+}
+
+.sparkle-button-tertiary {
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  border: 1px solid transparent;
+}
+
+.sparkle-button-tertiary:hover {
+  background: var(--sparkle-bg-subtle);
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-button-tertiary:active {
+  background: var(--sparkle-border);
+}
+
+/* Clase activa (PanelDocente): listado de alumnos conectados — Etapa 45 */
+
+.sparkle-section-label {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--sparkle-text-secondary);
+  margin: 0 0 8px 0;
+}
+
+/* Punto de estado reutilizado por `ConnectedStudentsBadge` (topbar de la
+   vista de clase en curso) — verde + sombra sutil cuando hay al menos un
+   alumno conectado; gris/apagado cuando no hay nadie. */
+.sparkle-status-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--sparkle-border-strong);
+}
+
+.sparkle-status-dot-active {
+  background: var(--sparkle-success);
+  box-shadow: 0 0 0 3px rgba(52, 168, 83, 0.16);
+}
+
+.sparkle-student-item-icon {
+  display: flex;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Formulario de registro de nombre (Etapa 68, Cambio 1 — NombreAlumno.jsx) */
+
+.sparkle-name-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sparkle-input-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+  transition: border-color 0.15s var(--sparkle-easing), box-shadow 0.15s var(--sparkle-easing);
+}
+
+.sparkle-input-group:focus-within {
+  border-color: var(--sparkle-primary);
+  box-shadow: 0 0 0 3px var(--sparkle-primary-light);
+}
+
+.sparkle-input-icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-input {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-input::placeholder {
+  color: var(--sparkle-border-strong);
+}
+
+.sparkle-input:disabled {
+  opacity: 0.6;
+}
+
+/* Historial de participantes (Etapa 68, Cambio 3 — HistorialAlumnos.jsx) */
+
+/* Ajuste 1 (Etapa 70) — estilo único para TODOS los botones/links de
+   "Volver" del sistema: chico, subrayado como un link de toda la vida (no
+   un botón sólido), y siempre el primer elemento de `.sparkle-screen-head`
+   — arriba de todo en la pantalla, nunca al pie ni mezclado con el resto
+   de los controles. Al ser una única clase compartida, cualquier pantalla
+   que la use (PanelDocente.jsx en "Cargar Archivo" y en la pantalla de
+   rechazo, NombreAlumno.jsx, HistorialAlumnos.jsx) queda consistente por
+   construcción — no hay que repetir el estilo en cada lugar. */
+.sparkle-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 0;
+  margin-bottom: 4px;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sparkle-primary);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.sparkle-back-link:hover {
+  color: var(--sparkle-primary-hover);
+}
+
+.sparkle-back-link:disabled {
+  opacity: 0.6;
+  cursor: default;
+  pointer-events: none;
+}
+
+.sparkle-historial-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.sparkle-historial-item {
+  padding: 12px;
+  background: var(--sparkle-bg-subtle);
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+}
+
+.sparkle-historial-item-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.sparkle-historial-item-titulo {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sparkle-historial-item-nombre {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-historial-item-email {
+  font-size: 11px;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-sesiones-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 0 26px;
+  list-style: none;
+}
+
+.sparkle-sesiones-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-sesiones-item-duracion {
+  flex-shrink: 0;
+  color: var(--sparkle-text-primary);
+  font-weight: 500;
+}
+
+/* Indicador de estado (PanelAlumno, clase en curso/detenida) — reutiliza
+   `.sparkle-class-status-badge`/`.sparkle-class-status-dot` (mismas clases
+   que ya usa el docente en `TeacherPanel.jsx`), así que ambos lados del
+   panel comparten exactamente el mismo lenguaje visual para "en curso" vs
+   "detenida". */
+
+.sparkle-student-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Alerta "Prestá atención" (PanelAlumno, clase en curso) — mismo ámbar que
+   ya usa `.sparkle-timer-badge` en el resto de Sparkle
+   (`--sparkle-warning`/`--sparkle-warning-light`), pero como tarjeta de
+   ancho completo en vez de una pill chica: a propósito más notoria que un
+   badge, sin llegar a ser invasiva (padding generoso pero altura moderada,
+   sin sombra). Solo se monta con la clase en curso — con la clase detenida
+   directamente no se renderiza, así que desaparece por completo (ver
+   `StudentPanel.jsx`). */
+.sparkle-attention-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  background: var(--sparkle-warning-light);
+  border: 1px solid rgba(176, 96, 0, 0.18);
+  border-radius: 14px;
+}
+
+.sparkle-attention-alert-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: rgba(176, 96, 0, 0.14);
+  color: var(--sparkle-warning);
+}
+
+.sparkle-attention-alert-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sparkle-attention-alert-title {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-attention-alert-subtitle {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Historial de preguntas respondidas (PanelAlumno, `StudentPanel.jsx`) —
+   solo las respuestas de ESTE alumno, ordenadas más reciente primero;
+   el borde izquierdo de color es el "indicador visual" a simple vista,
+   reforzado por el badge de arriba a la derecha de cada tarjeta. */
+
+.sparkle-answered-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sparkle-answered-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-left: 3px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+}
+
+.sparkle-answered-card--correct {
+  border-left-color: var(--sparkle-success);
+}
+
+.sparkle-answered-card--incorrect {
+  border-left-color: var(--sparkle-danger);
+}
+
+.sparkle-answered-card--skipped {
+  border-left-color: var(--sparkle-border-strong);
+}
+
+/* Cuarto estado — el alumno nunca interactuó con esta pregunta (venció el
+   tiempo, o nunca llegó a abrirla) y la base de datos NO tiene ninguna fila
+   de respuesta suya (ver `questionService.toStudentHistoryEntry`, backend).
+   Mismo tono neutro que "skipped" (ninguno de los dos es una elección
+   incorrecta que penalizar) — a propósito el mismo color, ya que el badge y
+   el texto de cada tarjeta son los que distinguen "eligió no responder" de
+   "ni siquiera respondió". */
+.sparkle-answered-card--unanswered {
+  border-left-color: var(--sparkle-border-strong);
+}
+
+.sparkle-answered-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sparkle-answered-card-prompt {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-answered-card-line {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.sparkle-answered-card-label {
+  color: var(--sparkle-text-secondary);
+  margin-right: 4px;
+}
+
+.sparkle-answered-card-value {
+  font-weight: 600;
+}
+
+.sparkle-answered-card-value--right {
+  color: var(--sparkle-success);
+}
+
+.sparkle-answered-card-value--wrong {
+  color: var(--sparkle-danger);
+}
+
+/* Botón TEMPORAL "Simular pregunta" (PanelAlumno) — a propósito con un
+   estilo bien distinto de `.sparkle-button-*` (borde punteado, gris, chico):
+   comunica visualmente que es una herramienta de prueba, no una función de
+   producto, para que sea obvio sacarlo cuando exista el envío real. */
+
+.sparkle-temp-test-button {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 6px 12px;
+  border: 1px dashed var(--sparkle-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s var(--sparkle-easing), color 0.15s var(--sparkle-easing);
+}
+
+.sparkle-temp-test-button:hover {
+  border-color: var(--sparkle-text-secondary);
+  color: var(--sparkle-text-primary);
+}
+
+/* Resumen de la clase (PanelAlumno — `screens/ClassSummary.jsx`) */
+
+.sparkle-summary-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sparkle-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sparkle-summary-list li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-summary-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sparkle-primary);
+}
+
+/* "Para repasar" (ClassSummary) — Corrección: antes cada pregunta era una
+   `.sparkle-answered-card` (tarjeta con borde/fondo/padding propios, igual
+   que "Preguntas realizadas" de `StudentPanel.jsx`), lo que hacía que esta
+   sección se leyera como un componente pegado debajo del resumen, no como
+   parte del mismo texto. Ahora cada pregunta es un `<li>` más del MISMO
+   `.sparkle-summary-list` de arriba — mismo marcador de viñeta (heredado
+   de la regla de arriba), misma tipografía/espaciado. Lo único que cambia
+   por pregunta es el COLOR del marcador y el de la etiqueta de estado
+   (`.sparkle-review-status--*`, más abajo) — nunca una caja ni un borde
+   nuevo. `.sparkle-review-list` solo agrega lo que un bullet de una sola
+   línea no necesita (más de una línea de contenido por ítem). */
+.sparkle-review-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-bottom: 2px;
+}
+
+.sparkle-review-item--correct::before {
+  background: var(--sparkle-success);
+}
+
+.sparkle-review-item--incorrect::before {
+  background: var(--sparkle-danger);
+}
+
+.sparkle-review-item--unanswered::before,
+.sparkle-review-item--skipped::before {
+  background: var(--sparkle-border-strong);
+}
+
+.sparkle-review-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sparkle-review-prompt {
+  font-weight: 500;
+}
+
+.sparkle-review-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.sparkle-review-status--correct {
+  color: var(--sparkle-success);
+}
+
+.sparkle-review-status--incorrect {
+  color: var(--sparkle-danger);
+}
+
+.sparkle-review-status--unanswered,
+.sparkle-review-status--skipped {
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-review-detail {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Modal "Simular pregunta" (PanelAlumno, TEMPORAL — ver comentario en
+   `StudentPanel.jsx`) — a diferencia de la vista previa del docente
+   (`.sparkle-option--static`, no interactiva), acá las opciones SÍ se
+   pueden elegir de verdad, por eso usan `.sparkle-option--picked` (azul,
+   igual que cualquier selección activa en el resto de Sparkle) en vez de
+   `.sparkle-option--correct` (verde, reservado para marcar la respuesta
+   correcta del lado del docente). */
+
+.sparkle-simulated-question-dialog {
+  width: 100%;
+  max-width: 290px;
+  max-height: 85%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+  overflow-y: auto;
+}
+
+.sparkle-option--picked {
+  background: var(--sparkle-primary-light);
+  border-color: var(--sparkle-primary);
+}
+
+.sparkle-option--picked .sparkle-option-marker {
+  border-color: var(--sparkle-primary);
+  background: var(--sparkle-primary);
+  color: #ffffff;
+}
+
+/* "Quiz final" (`FinalQuiz.jsx`) — al ver el resultado, la opción correcta
+   usa `.sparkle-option--correct` (verde, de arriba) y la que eligió el
+   alumno si estaba mal, esta variante en rojo. */
+.sparkle-option--wrong {
+  background: rgba(217, 48, 37, 0.06);
+  border-color: var(--sparkle-danger);
+}
+
+.sparkle-option--wrong .sparkle-option-marker {
+  border-color: var(--sparkle-danger);
+  background: var(--sparkle-danger);
+  color: #ffffff;
+}
+
+.sparkle-quiz-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sparkle-quiz-question {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Encabezado de cada pregunta: a la derecha, "Correcta"/"Incorrecta" al ver
+   el resultado. */
+.sparkle-quiz-question-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sparkle-quiz-question-head .sparkle-section-label {
+  margin: 0;
+}
+
+.sparkle-quiz-result {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sparkle-quiz-result--correct {
+  color: var(--sparkle-success);
+}
+
+.sparkle-quiz-result--wrong {
+  color: var(--sparkle-danger);
+}
+
+.sparkle-quiz-prompt {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-quiz-score {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--sparkle-text-primary);
+}
+
+/* Tarjeta de espera (PanelAlumno) */
+
+.sparkle-waiting-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: 32px 20px;
+  background: var(--sparkle-bg-subtle);
+  border: 1px dashed var(--sparkle-border-strong);
+  border-radius: 14px;
+}
+
+.sparkle-waiting-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  color: var(--sparkle-primary);
+}
+
+.sparkle-pulse-dot {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--sparkle-primary);
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
+.sparkle-pulse-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--sparkle-primary);
+  opacity: 0.6;
+  animation: sparkle-pulse 1.8s ease-out infinite;
+}
+
+@keyframes sparkle-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+/* Tarjeta UNIFICADA "Clase detenida" (PanelAlumno, `ui/ClassPausedCard.jsx`)
+   — Ajuste UI: reemplaza dos tarjetas antes separadas (clase que nunca
+   arrancó / clase detenida en vivo por el docente), cada una con su propio
+   texto y el look genérico de `.sparkle-waiting-card` de arriba. A
+   propósito NO reutiliza esas clases: `.sparkle-waiting-card` sigue viva
+   para `LobbyScreen.jsx`/`CallEndedScreen.jsx` (pantallas sin relación con
+   este estado, fuera del alcance de este ajuste), y este caso puntual
+   pedía más jerarquía visual — título grande, ícono más grande y
+   llamativo, mejor espaciado — que ese estilo genérico no tenía.
+   Paleta ámbar MUY suave (misma familia que `--sparkle-warning*`, ya usada
+   en la alerta "Prestá atención" de la clase en curso) a propósito, nunca
+   roja/de error: transmite una PAUSA, no un problema. */
+.sparkle-paused-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 40px 28px;
+  background: var(--sparkle-warning-light);
+  border: 1px solid #f2e2ab;
+  border-radius: 20px;
+}
+
+.sparkle-paused-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+  color: var(--sparkle-warning);
+  box-shadow: 0 3px 10px rgba(176, 96, 0, 0.18);
+}
+
+.sparkle-paused-card-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--sparkle-text-primary);
+}
+
+/* Preview de cámara (Etapa 63/64, `CameraPreviewBox` en `CameraPreview.jsx`)
+   — HERRAMIENTA DE PRUEBA, pensada para eliminarse por completo antes de
+   las funcionalidades reales de IA (ver DOCUMENTACION.md): si ese
+   componente se saca, estas reglas se sacan con él.
+   Etapa 64 — reposicionado: antes vivía DENTRO del panel (`position:
+   absolute` anclado a `.sparkle-panel`, esquina inferior derecha DEL
+   PANEL). Ahora se monta como HERMANO de `.sparkle-panel` en `App.jsx` (ver
+   ese archivo) y usa `position: fixed` respecto a la VENTANA completa,
+   esquina inferior IZQUIERDA — flota sobre el contenido de Meet, fuera del
+   panel, igual que `.sparkle-toggle-tab`. `pointer-events: auto` explícito
+   por el mismo motivo que esa clase: el `<div id="sparkle-v2-host">` que
+   contiene todo el árbol de React tiene `pointer-events: none` (para no
+   bloquear clicks sobre Meet en el espacio "vacío" del host), así que cada
+   elemento visible tiene que reactivarlo por su cuenta (ver
+   `content/main.jsx`). */
+.sparkle-camera-preview {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  width: 160px;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--sparkle-radius);
+  overflow: hidden;
+  border: 1px solid var(--sparkle-border);
+  background: #000;
+  box-shadow: 0 3px 5px -1px rgba(0, 0, 0, 0.2), 0 6px 10px 0 rgba(0, 0, 0, 0.14),
+    0 1px 18px 0 rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
+  z-index: 2;
+}
+
+.sparkle-camera-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Detección de atención — se superpone al preview de cámara del alumno
+   (`ui/CameraPreviewBox.jsx`). El recuadro contenedor ya es `position: fixed`
+   con `overflow: hidden`, así que estos dos hijos se posicionan contra él sin
+   necesidad de tocar nada más. */
+.sparkle-attention-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  /* Fondo translúcido oscuro: el video de abajo puede ser de cualquier color,
+     y un fondo sólido taparía demasiado de un preview que ya es chico. */
+  background: rgba(32, 33, 36, 0.72);
+  backdrop-filter: blur(2px);
+  line-height: 1.1;
+  pointer-events: auto;
+}
+
+/* Solo DOS colores posibles en todo el sistema (pedido explícito) — el
+   corte verde/rojo está atado al umbral REAL de la predicción (`Y`, ver
+   `colorConcentracion` en `CameraPreviewBox.jsx`), así que si el panel de
+   ajuste rápido cambia `Y` el color se corre junto con él, sin ningún
+   tercer estado intermedio. */
+.sparkle-attention-badge--verde { color: var(--sparkle-success); }
+.sparkle-attention-badge--roja { color: var(--sparkle-danger); }
+
+.sparkle-attention-badge-value {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.sparkle-attention-badge-label {
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+/* Capturas desatentas en la ventana deslizante ("2/10", ver K en
+   `hooks/useFatigueAlert.js`) — mismo badge, debajo del porcentaje; color
+   neutro (no repite el semáforo de arriba) para no competir con la señal
+   principal. */
+.sparkle-attention-badge-ventana {
+  font-size: 9px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  margin-top: 1px;
+}
+
+.sparkle-attention-status {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 4px 6px;
+  font-size: 10px;
+  text-align: center;
+  background: rgba(32, 33, 36, 0.72);
+  backdrop-filter: blur(2px);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.sparkle-attention-status--aviso { color: var(--sparkle-warning); }
+.sparkle-attention-status--error { color: var(--sparkle-danger); }
+
+.sparkle-camera-preview--error {
+  background: var(--sparkle-bg-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  text-align: center;
+}
+
+/* Switch "Modo debug" en OFF — oculta el recuadro sin desmontar el `<video>`
+   de adentro (ver el comentario largo de `debugToolsVisible` en
+   `CameraPreviewBox.jsx`: desmontarlo rompía el `srcObject` que le asigna
+   `useCameraPreference`, que no vuelve a correr solo porque el switch
+   cambie). */
+.sparkle-camera-preview--oculto {
+  display: none;
+}
+
+/* Contenedor genérico de notificaciones (`ui/NotificationStack.jsx`) —
+   agrupa las cuatro notificaciones flotantes de esquina superior izquierda
+   (`NewQuestionToast`, `FatigueAlert`, `GroupAttentionAlert`,
+   `ClassResumeNotice`) en un único `position: fixed`, apiladas con flexbox
+   en vez del viejo mecanismo de `ResizeObserver` + offset manual (que solo
+   cubría la combinación Toast+Fatiga). `z-index: 30` — por encima de
+   cualquier otra capa de esta app (el techo previo era 20, ver
+   `.sparkle-confirm-backdrop`/`.sparkle-attention-popover`) y, al ser un
+   `position: fixed` inyectado como hijo directo del body de Meet, también
+   por encima de la UI nativa de Meet. `pointer-events: none` en el
+   contenedor — cada notificación reactiva sus propios clicks al volverse
+   visible (ver `--visible` de cada una, más abajo), así que el contenedor
+   en sí nunca bloquea nada mientras está vacío o con hijas ocultas. */
+.sparkle-notification-stack {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: none;
+}
+
+/* Alerta de fatiga/desatención (`ui/FatigueAlert.jsx`, `hooks/useFatigueAlert.js`)
+   — MISMO patrón que `.sparkle-question-toast` (mismo `border` neutro, no
+   un borde de acento propio, para que sea indistinguible en estilo de esa
+   otra notificación; solo el ícono/color de fondo del círculo marcan que
+   esta es de tipo "aviso"). Hija de `.sparkle-notification-stack`:
+   `position: absolute` mientras está oculta (no reserva espacio en el flex
+   del contenedor) y pasa a `position: static` al aparecer (`--visible`,
+   ocupa su lugar en la pila y empuja a lo que venga después) — así, si
+   `NewQuestionToast` (que va ANTES en el DOM, ver `App.jsx`) también está
+   visible, esta se acomoda debajo sola, sin ningún cálculo de alto manual. */
+.sparkle-fatigue-alert {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 14px 14px 14px 16px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 14px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+  font-family: var(--sparkle-font);
+  opacity: 0;
+  transform: translate(-14px, -10px);
+  transition: opacity 280ms var(--sparkle-easing), transform 280ms var(--sparkle-easing);
+  pointer-events: none;
+}
+
+.sparkle-fatigue-alert--visible {
+  position: static;
+  opacity: 1;
+  transform: translate(0, 0);
+  pointer-events: auto;
+}
+
+.sparkle-fatigue-alert-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sparkle-warning) 18%, transparent);
+  color: var(--sparkle-warning);
+}
+
+.sparkle-fatigue-alert-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sparkle-fatigue-alert-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sparkle-fatigue-alert-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-fatigue-alert-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  cursor: pointer;
+  transition: background-color 150ms var(--sparkle-easing);
+}
+
+.sparkle-fatigue-alert-close:hover {
+  background: var(--sparkle-bg-subtle);
+}
+
+.sparkle-fatigue-alert-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Fila de dos acciones (primario "Recuperar contenido" + secundario
+   "Ignorar") — a diferencia de `.sparkle-question-toast-cta` (un solo
+   botón, ancho completo), acá `.sparkle-button` pisa su propio
+   `width: 100%` para que ambos convivan lado a lado en un toast angosto. */
+.sparkle-fatigue-alert-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sparkle-fatigue-alert-actions .sparkle-button {
+  width: auto;
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 12.5px;
+}
+
+/* Alerta grupal de atención (`ui/GroupAttentionAlert.jsx`,
+   `hooks/useGroupAttentionAlert.js`) — DOCENTE, mismos valores exactos que
+   `.sparkle-fatigue-alert*` de arriba (mismo estilo, misma hija de
+   `.sparkle-notification-stack`), duplicados acá a propósito en vez de
+   compartir clase: mismo criterio que el resto de las notificaciones
+   flotantes de este código (cada una replica su propio estilo, ver
+   `NewQuestionToast.jsx`/`ClassResumeNotice.jsx`). En la práctica nunca
+   coincide visible con `.sparkle-resume-notice` (ver el comentario del
+   componente), pero al ser ambas hijas del mismo flex quedarían apiladas
+   sin overlap igual si alguna vez coincidieran. */
+.sparkle-group-alert {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 14px 14px 14px 16px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 14px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+  font-family: var(--sparkle-font);
+  opacity: 0;
+  transform: translate(-14px, -10px);
+  transition: opacity 280ms var(--sparkle-easing), transform 280ms var(--sparkle-easing);
+  pointer-events: none;
+}
+
+.sparkle-group-alert--visible {
+  position: static;
+  opacity: 1;
+  transform: translate(0, 0);
+  pointer-events: auto;
+}
+
+.sparkle-group-alert-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sparkle-warning) 18%, transparent);
+  color: var(--sparkle-warning);
+}
+
+.sparkle-group-alert-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sparkle-group-alert-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sparkle-group-alert-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-group-alert-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  cursor: pointer;
+  transition: background-color 150ms var(--sparkle-easing);
+}
+
+.sparkle-group-alert-close:hover {
+  background: var(--sparkle-bg-subtle);
+}
+
+.sparkle-group-alert-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-group-alert-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sparkle-group-alert-actions .sparkle-button {
+  width: auto;
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 12.5px;
+}
+
+/* Widget flotante de ajuste rápido N/X/Y/C (`ui/AttentionSettingsPanel.jsx`) —
+   HERRAMIENTA DE PRUEBA (mismo criterio que `.sparkle-camera-preview`, ver
+   ese comentario): pensada para desarrollo/QA, no para el alumno final.
+   Esquina inferior derecha: `.sparkle-camera-preview` ya ocupa la inferior
+   izquierda, y así queda simétrico. `z-index` por encima de `.sparkle-panel`
+   para poder abrirlo/cerrarlo aunque el panel esté abierto.
+   Ya no tiene switch visual propio — el ÚNICO control de "Modo debug" es el
+   atajo de teclado Ctrl+Q (ver el `useEffect` en `App.jsx`), que togglea a
+   la vez el propio drawer de N/X/Y/C, `AttentionDebugLog` y
+   `CameraPreviewBox`. Este contenedor solo existe para posicionar el drawer
+   de abajo, condicional a `visible`. */
+.sparkle-attention-settings {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 7;
+  pointer-events: auto;
+}
+
+.sparkle-attention-settings-drawer {
+  position: absolute;
+  right: 0;
+  bottom: 44px;
+  width: 260px;
+  padding: 12px 14px 14px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 12px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+  font-family: var(--sparkle-font);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sparkle-attention-settings-title {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-attention-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sparkle-attention-settings-field-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-attention-settings-field input {
+  font-family: var(--sparkle-font);
+  font-size: 12.5px;
+  padding: 4px 6px;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 6px;
+  color: var(--sparkle-text-primary);
+}
+
+/* Todos los campos de ambos paneles (alumno y docente) son sliders — el
+   estilo de arriba (pensado para texto/número) no le queda: sin
+   borde/padding propios, ancho completo, y el color de la app en el
+   thumb/track nativo del slider. */
+.sparkle-attention-settings-field input[type='range'] {
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  accent-color: var(--sparkle-primary);
+}
+
+.sparkle-attention-settings-field-desc {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-attention-settings-hint {
+  margin: 0;
+  font-size: 10px;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Notificación flotante "Nueva pregunta en vivo" (`NewQuestionToast.jsx`) —
+   vive FUERA de `.sparkle-panel` por completo, como hija de
+   `.sparkle-notification-stack` (hermano de `.sparkle-panel` en `App.jsx`,
+   `position: fixed` relativo a toda la ventana, no al panel), así que avisa
+   incluso con el panel cerrado. Siempre montada — la visibilidad se anima
+   con opacity/transform (fade + slide) en vez de mount/unmount, y
+   `pointer-events: none` mientras está oculta asegura que nunca bloquea
+   clicks debajo suyo. Primera en el DOM entre las notificaciones del stack
+   (ver `App.jsx`) — si `.sparkle-fatigue-alert` coincide visible, queda
+   apilada debajo sola vía flexbox, sin ningún cálculo de alto manual. */
+.sparkle-question-toast {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 14px 14px 14px 16px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 14px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+  font-family: var(--sparkle-font);
+  opacity: 0;
+  transform: translate(-14px, -10px);
+  transition: opacity 280ms var(--sparkle-easing), transform 280ms var(--sparkle-easing);
+  pointer-events: none;
+}
+
+.sparkle-question-toast--visible {
+  position: static;
+  opacity: 1;
+  transform: translate(0, 0);
+  pointer-events: auto;
+}
+
+.sparkle-question-toast-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--sparkle-primary-light);
+  color: var(--sparkle-primary);
+}
+
+.sparkle-question-toast-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sparkle-question-toast-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sparkle-question-toast-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-question-toast-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  cursor: pointer;
+  transition: background-color 150ms var(--sparkle-easing);
+}
+
+.sparkle-question-toast-close:hover {
+  background: var(--sparkle-bg-subtle);
+}
+
+.sparkle-question-toast-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-question-toast-cta {
+  padding: 9px 14px;
+  font-size: 12.5px;
+}
+
+/* Notificación flotante "La clase está detenida" (`ClassResumeNotice.jsx`)
+   — hija de `.sparkle-notification-stack`, igual que
+   `.sparkle-question-toast`/`.sparkle-fatigue-alert`/`.sparkle-group-alert`
+   de arriba: es SOLO para el docente, así que en la práctica nunca coincide
+   visible con las otras dos (SOLO alumno), pero comparte el mismo
+   contenedor por si algún día dejaran de ser mutuamente excluyentes.
+   El componente solo monta este nodo mientras tiene algo que mostrar (fases
+   'visible'/'leaving' — ver `ClassResumeNotice.jsx`); `--visible` es la
+   única variante de acá, y su AUSENCIA (fase 'leaving') dispara la
+   transición de salida antes de que React lo desmonte del todo — a
+   diferencia de `.sparkle-question-toast` (que queda siempre en el DOM con
+   la visibilidad animada por CSS), acá el nodo nunca queda oculto
+   indefinidamente: aparece, eventualmente se retira (auto-hide, "X", o
+   "Reanudar clase"), y desaparece del DOM de verdad. */
+.sparkle-resume-notice {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 14px 14px 14px 16px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 14px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+  font-family: var(--sparkle-font);
+  opacity: 0;
+  transform: translate(-14px, -10px);
+  transition: opacity 280ms var(--sparkle-easing), transform 280ms var(--sparkle-easing);
+  pointer-events: none;
+}
+
+.sparkle-resume-notice--visible {
+  position: static;
+  opacity: 1;
+  transform: translate(0, 0);
+  pointer-events: auto;
+}
+
+.sparkle-resume-notice-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--sparkle-warning-light);
+  color: var(--sparkle-warning);
+}
+
+.sparkle-resume-notice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sparkle-resume-notice-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sparkle-resume-notice-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-resume-notice-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  cursor: pointer;
+  transition: background-color 150ms var(--sparkle-easing);
+}
+
+.sparkle-resume-notice-close:hover {
+  background: var(--sparkle-bg-subtle);
+}
+
+.sparkle-resume-notice-cta {
+  padding: 9px 14px;
+  font-size: 12.5px;
+}
+
+/* Aviso de encuadre de cámara (`ui/CameraPositionNotice.jsx`) — TODAVÍA NO
+   CONECTADO a ningún evento real (paso 1 de 2, ver `App.jsx`). Mismo
+   patrón que `.sparkle-question-toast`/`.sparkle-fatigue-alert` de arriba:
+   hija de `.sparkle-notification-stack`, siempre montada, `position:
+   absolute` oculta → `position: static` visible vía `--visible`. Ícono en
+   `--sparkle-primary`/`-light` (no `--sparkle-warning`): es un aviso
+   informativo/instructivo, no una alerta urgente — mismo criterio de color
+   que `.sparkle-question-toast-icon`. */
+.sparkle-camera-notice {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 14px 14px 14px 16px;
+  background: #ffffff;
+  border: 1px solid var(--sparkle-border);
+  border-radius: 14px;
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+  font-family: var(--sparkle-font);
+  opacity: 0;
+  transform: translate(-14px, -10px);
+  transition: opacity 280ms var(--sparkle-easing), transform 280ms var(--sparkle-easing);
+  pointer-events: none;
+}
+
+.sparkle-camera-notice--visible {
+  position: static;
+  opacity: 1;
+  transform: translate(0, 0);
+  pointer-events: auto;
+}
+
+.sparkle-camera-notice-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--sparkle-primary-light);
+  color: var(--sparkle-primary);
+}
+
+.sparkle-camera-notice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sparkle-camera-notice-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sparkle-camera-notice-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-camera-notice-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  cursor: pointer;
+  transition: background-color 150ms var(--sparkle-easing);
+}
+
+.sparkle-camera-notice-close:hover {
+  background: var(--sparkle-bg-subtle);
+}
+
+.sparkle-camera-notice-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-camera-notice-cta {
+  padding: 9px 14px;
+  font-size: 12.5px;
+}
+
+/* Feedback grande de "¡Respuesta correcta!"/"Respuesta incorrecta"
+   (`ui/AnswerResultPopup.jsx`) — vive DESCENDIENTE de `.sparkle-panel` (ver
+   `App.jsx`), no hermano como `.sparkle-question-toast`/
+   `.sparkle-resume-notice`. Mismo mecanismo que `.sparkle-confirm-backdrop`
+   de arriba (mismo `position: absolute; inset: 0`): `.sparkle-panel` ya es
+   `position: fixed` (un ancestro "posicionado"), así que este `inset: 0`
+   queda acotado EXACTO a los 320px × 100vh del panel sin importar cuántos
+   `<div>` sin posicionar haya en el medio — nunca tapa el resto de Google
+   Meet, y no le importa el scroll de `.sparkle-content` (un descendiente
+   `position: absolute`/`fixed` no se desplaza con el scroll de nada que no
+   sea su propio contenedor posicionado).
+   Corrección — a diferencia de `.sparkle-confirm-backdrop` (que solo
+   ATENÚA lo que hay detrás, `rgba(32, 33, 36, 0.4)`), este fondo es
+   `var(--sparkle-bg)` BLANCO y completamente OPACO: cubre por completo
+   cualquier contenido anterior del panel (y, de paso, cualquier resto de
+   Meet que se llegara a colar) mientras se muestra el resultado — nunca se
+   transparenta nada detrás de la tarjeta. Se anima el mismo `background-
+   color` de siempre (0 → 1 de opacidad), así que la transición de
+   entrada/salida sigue siendo la misma, ahora tapando del todo en vez de
+   solo oscurecer.
+   Diseño — reutiliza el mismo lenguaje visual que el resto de Sparkle en
+   vez de uno nuevo: la tarjeta es la MISMA receta que `.sparkle-paused-card`
+   (tinte sólido y opaco, borde sutil, radio grande, ícono en círculo
+   blanco con sombra suave) recoloreada por estado, y la sombra de la
+   tarjeta en sí es la MISMA que ya usan `.sparkle-question-toast`/
+   `.sparkle-resume-notice`. Sin animaciones de rebote ni brillos — solo
+   fade + scale suave, y el ícono no tiene ninguna animación propia. */
+.sparkle-answer-result {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0);
+  transition: background-color 220ms var(--sparkle-easing);
+}
+
+.sparkle-answer-result--visible {
+  background: var(--sparkle-bg);
+}
+
+.sparkle-answer-result-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 230px;
+  padding: 32px 24px;
+  border-radius: 20px;
+  border: 1px solid var(--sparkle-border);
+  box-shadow: 0 4px 6px 0 rgba(60, 64, 67, 0.15), 0 1px 18px 2px rgba(60, 64, 67, 0.15);
+  font-family: var(--sparkle-font);
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity 220ms var(--sparkle-easing), transform 220ms var(--sparkle-easing);
+}
+
+.sparkle-answer-result-card--visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.sparkle-answer-result-card--correct {
+  background: var(--sparkle-success-light);
+}
+
+.sparkle-answer-result-card--incorrect {
+  background: var(--sparkle-danger-light);
+}
+
+.sparkle-answer-result-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 4px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.sparkle-answer-result-card--correct .sparkle-answer-result-icon {
+  color: var(--sparkle-success);
+  box-shadow: 0 3px 10px rgba(52, 168, 83, 0.18);
+}
+
+.sparkle-answer-result-card--incorrect .sparkle-answer-result-icon {
+  color: var(--sparkle-danger);
+  box-shadow: 0 3px 10px rgba(217, 48, 37, 0.18);
+}
+
+.sparkle-answer-result-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--sparkle-text-primary);
+}
+
+/* Carga de documentos (PanelDocente — `ui/DocumentUploadBlock.jsx`,
+   `hooks/useDocumentUpload.js`) — bloque INLINE dentro del panel principal
+   (nunca una pantalla propia), ver la pantalla previa a "Comenzar Clase"
+   en `screens/TeacherPanel.jsx`. */
+
+.sparkle-doc-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sparkle-doc-upload-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sparkle-doc-upload-actions .sparkle-button {
+  flex: 1;
+  width: auto;
+}
+
+/* Versión más chica del dropzone genérico de más abajo — este bloque vive
+   INLINE dentro de la pantalla previa a "Comenzar Clase", junto al resto
+   de los controles (a diferencia de una pantalla propia con todo el alto
+   disponible), así que un padding más chico lo mantiene "compacto" como
+   pide el diseño. */
+.sparkle-dropzone--compact {
+  padding: 16px;
+  gap: 4px;
+}
+
+.sparkle-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 28px 16px;
+  border: 1.5px dashed var(--sparkle-border-strong);
+  border-radius: var(--sparkle-radius);
+  background: var(--sparkle-bg-subtle);
+  color: var(--sparkle-text-secondary);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s var(--sparkle-easing), background-color 0.15s var(--sparkle-easing);
+}
+
+.sparkle-dropzone:hover,
+.sparkle-dropzone--dragging {
+  border-color: var(--sparkle-primary);
+  background: var(--sparkle-primary-light);
+}
+
+.sparkle-dropzone-icon {
+  color: var(--sparkle-primary);
+}
+
+.sparkle-dropzone-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-dropzone-hint {
+  font-size: 12px;
+  color: var(--sparkle-text-secondary);
+}
+
+/* El input real queda invisible pero sigue en el DOM (accesible por
+   teclado a través del `role="button"` del dropzone, que lo dispara con
+   `.click()`) — mismo truco que un file input "custom" sin depender de
+   ningún estilo de navegador para el widget nativo. */
+.sparkle-file-input-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+.sparkle-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+  background: var(--sparkle-bg);
+}
+
+.sparkle-file-row--error {
+  border-color: var(--sparkle-danger);
+  background: var(--sparkle-danger-light);
+}
+
+.sparkle-file-row-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--sparkle-radius);
+  background: var(--sparkle-primary-light);
+  color: var(--sparkle-primary);
+}
+
+.sparkle-file-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sparkle-file-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sparkle-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sparkle-file-row-meta {
+  font-size: 12px;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-file-row-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sparkle-text-secondary);
+  cursor: pointer;
+}
+
+.sparkle-file-row-remove:hover {
+  background: var(--sparkle-bg-subtle);
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-file-row-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sparkle-file-row-status--success,
+.sparkle-file-row-status--pending,
+.sparkle-file-row-status--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+}
+
+.sparkle-file-row-status--success {
+  background: var(--sparkle-success-light);
+  color: var(--sparkle-success);
+}
+
+/* Análisis con IA todavía en curso ('uploaded'/'processing', ver
+   `ui/DocumentUploadBlock.jsx`) — misma paleta ámbar que
+   `.sparkle-text-warning`, nunca roja: no es un error, es una espera. */
+.sparkle-file-row-status--pending {
+  background: var(--sparkle-warning-light);
+  color: var(--sparkle-warning);
+}
+
+.sparkle-file-row-status--error {
+  background: var(--sparkle-danger-light);
+  color: var(--sparkle-danger);
+}
+
+/* Resumen del documento (paso 2 OPCIONAL del pipeline, ver
+   `ui/DocumentUploadBlock.jsx` — `DocumentSummarySection` — y
+   `backend/src/services/documentAnalysisService.js`): temas + conceptos
+   clave. El texto extraído crudo NO se muestra acá (sigue guardado en
+   MySQL, solo dejó de exponerse en la UI). Mismo criterio de contenedor
+   que el resto del bloque (borde + fondo propio, ver `.sparkle-file-row`
+   más arriba). */
+.sparkle-doc-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+  background: var(--sparkle-bg);
+  padding: 10px 12px;
+}
+
+.sparkle-doc-summary-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--sparkle-text-secondary);
+}
+
+.sparkle-doc-summary-filename {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sparkle-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sparkle-doc-summary-pages {
+  flex-shrink: 0;
+}
+
+.sparkle-doc-summary-topics {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-doc-summary-concepts {
+  margin: 8px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sparkle-doc-summary-concept dt {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-doc-summary-concept dd {
+  margin: 2px 0 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--sparkle-text-secondary);
+}
+
+/* Colapsable genérico (hoy: Conceptos clave, cuando son muchos) —
+   `<details>`/`<summary>` nativos, sin ninguna librería: el triángulo
+   default del navegador se saca (`list-style: none` + `::marker`) a favor
+   de `ChevronRightIcon`, que rota 90° al abrirse para señalar el cambio de
+   estado. */
+.sparkle-doc-collapsible {
+  border-top: 1px solid var(--sparkle-border);
+  padding-top: 8px;
+}
+
+.sparkle-doc-collapsible-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--sparkle-text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.sparkle-doc-collapsible-summary::-webkit-details-marker {
+  display: none;
+}
+
+.sparkle-doc-collapsible-summary:hover {
+  color: var(--sparkle-text-primary);
+}
+
+.sparkle-doc-collapsible-chevron {
+  flex-shrink: 0;
+  transition: transform 0.15s var(--sparkle-easing);
+}
+
+.sparkle-doc-collapsible[open] > .sparkle-doc-collapsible-summary .sparkle-doc-collapsible-chevron {
+  transform: rotate(90deg);
+}
+
+.sparkle-doc-collapsible + .sparkle-doc-collapsible {
+  margin-top: 2px;
+}
+
+/* ============================================================
+   TODO: DEBUG TEMPORAL — bloque completo a borrar junto con
+   `ui/AttentionDebugLog.jsx` una vez terminada la verificación manual.
+   Costado IZQUIERDO, entre el toast de pregunta (arriba) y el preview de
+   cámara (abajo), para no tapar ninguno de los dos. z-index alto: tiene que
+   quedar visible incluso con el panel abierto, es una herramienta de
+   inspección, no parte del producto.
+   ============================================================ */
+.sparkle-debug-log {
+  position: fixed;
+  top: 150px;
+  bottom: 150px;
+  left: 16px;
+  width: 240px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  background: rgba(20, 20, 22, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 10px;
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.sparkle-debug-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.sparkle-debug-log-clear {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 9px;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 0;
+}
+
+.sparkle-debug-log-clear:hover {
+  color: #ffffff;
+}
+
+/* Guion del conjunto propio (`Protocolo_Reglas_Geometricas.md` §5) — vive con
+   el resto del panel de debug y se va junto con el. Mismo tema oscuro que
+   `.sparkle-debug-log`; el bloque activo se muestra grande a proposito, porque
+   quien conduce la sesion lo lee de reojo mientras habla con el participante. */
+.sparkle-debug-log-guion {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.sparkle-debug-log-guion-inicio {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sparkle-debug-log-guion-inicio label {
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.3px;
+}
+
+.sparkle-debug-log-guion-inicio input {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: #ffffff;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 5px;
+}
+
+.sparkle-debug-log-guion button {
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.85);
+  font-family: inherit;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  padding: 3px 6px;
+}
+
+.sparkle-debug-log-guion button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sparkle-debug-log-guion-bloque {
+  margin: 0 0 2px;
+  font-size: 12px;
+  color: #ffe08a;
+}
+
+.sparkle-debug-log-guion-resta {
+  margin: 0 0 2px;
+  font-size: 20px;
+  line-height: 1;
+  color: #ffffff;
+}
+
+.sparkle-debug-log-guion-orden,
+.sparkle-debug-log-guion-fin {
+  margin: 0 0 4px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* El aviso de bloque mas corto que la ventana NO es decorativo: es la
+   advertencia de que ninguna lectura describe un solo bloque. Ambar, y
+   siempre visible mientras esa condicion se cumpla. */
+.sparkle-debug-log-guion-aviso {
+  margin: 4px 0 0;
+  color: #ffb35c;
+  line-height: 1.3;
+}
+
+.sparkle-debug-log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px;
+}
+
+.sparkle-debug-log-empty {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.sparkle-debug-log-row {
+  margin: 0;
+  padding: 2px 0;
+  color: #b8f2b8;
+  white-space: nowrap;
+}
+
+.sparkle-debug-log-row--desatento {
+  color: #f2b8b8;
+}
+
+.sparkle-debug-log-row--sin-rostro {
+  color: #f2e0b8;
+}
+
+/* Bloque de una predicción: línea resumen (arriba, reusa
+   `.sparkle-debug-log-row` para el color verde/rojo de atento/desatento) +
+   lista de TODAS las métricas numéricas que devolvió el modelo para esa
+   predicción (ver `metricasDePrediccion` en `AttentionDebugLog.jsx`). */
+.sparkle-debug-log-bloque-prediccion {
+  padding-bottom: 4px;
+}
+
+.sparkle-debug-log-metricas {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 8px;
+}
+
+.sparkle-debug-log-metrica {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  /* Texto claro sobre el fondo oscuro del panel (`.sparkle-debug-log`,
+     rgba(20,20,22,0.88)) — a propósito más tenue que las filas de arriba
+     (que usan verde/rojo para atento/desatento) para no competir con ellas,
+     pero siempre legible. */
+  color: rgba(255, 255, 255, 0.75);
+  /* Subrayado punteado: única pista visual de que la etiqueta tiene tooltip
+     (`title`) con la descripción de la métrica — no hay otro afinado táctil
+     posible en un log de solo texto monospace. */
+  border-bottom: 1px dotted transparent;
+}
+
+.sparkle-debug-log-metrica-etiqueta {
+  border-bottom: 1px dotted rgba(255, 255, 255, 0.35);
+  cursor: help;
+}
+
+.sparkle-debug-log-metrica-valor {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* Switch "Modo debug" en OFF — oculta el log sin desmontarlo (ver el
+   comentario de `visible` en `AttentionDebugLog.jsx`: desmontarlo destruía
+   su `useState` de `entradas`, perdiendo todo el historial acumulado cada
+   vez que se togglea el switch). El efecto que sigue acumulando filas nuevas
+   no depende de esta clase — sigue corriendo igual mientras está oculto. */
+.sparkle-debug-log--oculto {
+  display: none;
+}
+
+/* ============================================================
+   FIN bloque DEBUG TEMPORAL
+   ============================================================ */
+
+/* Log en tiempo real del roster (panel del DOCENTE, `ui/TeacherDebugLog.jsx`)
+   — mismo patrón estructural Y mismo tema visual que `.sparkle-debug-log`
+   de arriba (recuadro monospace fijo, header con "limpiar", cuerpo con
+   scroll, fondo oscuro con texto claro) — pedido explícito posterior: antes
+   era tema CLARO (fondo blanco) "para combinar con el panel del docente";
+   ahora es deliberadamente IGUAL al debug del alumno, colores literales
+   calcados de `.sparkle-debug-log-row*` en vez de las variables
+   `--sparkle-text-primary`/`--sparkle-success`/etc. de arriba (esas están
+   pensadas para texto sobre fondo BLANCO — ilegibles o de bajo contraste
+   sobre este fondo oscuro). Posicionado PEGADO al borde izquierdo de
+   `.sparkle-panel` (320px de ancho + 16px de gap = 336px desde el borde
+   derecho de la ventana) — al costado del panel principal, nunca encima ni
+   debajo, independiente de si el panel está abierto o cerrado (mismo
+   criterio que el resto de las herramientas de debug de esta app). */
+.sparkle-teacher-debug-log {
+  position: fixed;
+  top: 16px;
+  bottom: 16px;
+  right: 336px;
+  width: 300px;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  background: rgba(20, 20, 22, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 10px;
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.sparkle-teacher-debug-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.sparkle-teacher-debug-log-clear {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 9px;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 0;
+}
+
+.sparkle-teacher-debug-log-clear:hover {
+  color: #ffffff;
+}
+
+.sparkle-teacher-debug-log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 10px 8px;
+}
+
+.sparkle-teacher-debug-log-empty {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Punto 12 (pedido explícito) — mensaje de pausa cuando no hay ningún
+   alumno con cámara activa: mismo tono ámbar que
+   `.sparkle-teacher-debug-log-row--sin-rostro`, familia "atención, no
+   error". No reemplaza al mensaje "sin iteraciones todavía…" — pueden
+   convivir (recién montado, sin nadie conectado todavía). */
+.sparkle-teacher-debug-log-pausado {
+  margin: 0 0 6px;
+  color: #f2e0b8;
+}
+
+.sparkle-teacher-debug-log-ts {
+  margin: 6px 0 2px;
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 700;
+}
+
+.sparkle-teacher-debug-log-bloque:first-child .sparkle-teacher-debug-log-ts {
+  margin-top: 0;
+}
+
+.sparkle-teacher-debug-log-separador {
+  margin: 6px 0;
+  border: none;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+.sparkle-teacher-debug-log-row {
+  margin: 0;
+  padding: 1px 0;
+  color: #b8f2b8;
+  white-space: nowrap;
+}
+
+.sparkle-teacher-debug-log-row--atento {
+  color: #b8f2b8;
+}
+
+.sparkle-teacher-debug-log-row--desatento {
+  color: #f2b8b8;
+}
+
+.sparkle-teacher-debug-log-row--sin-rostro {
+  color: #f2e0b8;
+}
+
+.sparkle-teacher-debug-log-resumen {
+  margin: 2px 0 0;
+  padding-top: 2px;
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 700;
+}
+
+/* Switch "Modo debug" del docente en OFF — oculta el log sin desmontarlo
+   (mismo motivo que `.sparkle-debug-log--oculto`: desmontar destruiría el
+   historial de iteraciones acumulado). */
+.sparkle-teacher-debug-log--oculto {
+  display: none;
+}
+
+/* Selector de modo de clase (pantalla pre-clase del docente, ver
+   `ui/AttentionModeSelector.jsx`) — segundo rediseño (pedido explícito: el
+   primero, con tarjetas grandes, no convenció): vuelve a ser un `<select>`,
+   pero estilizado a mano — `appearance: none` saca el control gris nativo
+   del browser, `.sparkle-mode-select-chevron` superpone un ícono propio
+   (reusa `ChevronRightIcon` rotado 90°, no un ícono nuevo) en su lugar.
+   Mismo vocabulario visual que el resto del panel: borde/radius/colores de
+   `--sparkle-border`/`--sparkle-primary*`, mismo anillo de foco que ya usa
+   `.sparkle-camera-switch-input:focus-visible` (`outline` sólido en vez de
+   `box-shadow`, más visible sobre fondo claro). Las `<option>` en sí no se
+   pueden re-estilizar más allá de texto/fondo — limitación real de
+   `<select>` en cualquier browser, aceptada a propósito (pedido explícito:
+   "un dropdown, pero bien diseñado", no reemplazarlo por un
+   popover/listbox custom). */
+.sparkle-mode-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Sin clase propia para el label -- usa `.sparkle-section-label`
+   (compartida con "Material de la clase", ver `ui/DocumentUploadBlock.jsx`)
+   directo en el JSX, pedido explícito de que ambos se vean IDÉNTICOS. */
+
+.sparkle-mode-select-wrap {
+  position: relative;
+  display: flex;
+}
+
+.sparkle-mode-select {
+  width: 100%;
+  padding: 11px 36px 11px 14px;
+  border: 1.5px solid var(--sparkle-border);
+  border-radius: var(--sparkle-radius);
+  background: #ffffff;
+  color: var(--sparkle-text-primary);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  transition: border-color 0.15s var(--sparkle-easing), box-shadow 0.15s var(--sparkle-easing);
+}
+
+.sparkle-mode-select:hover {
+  border-color: var(--sparkle-border-strong);
+}
+
+.sparkle-mode-select:focus-visible {
+  outline: 2px solid var(--sparkle-primary);
+  outline-offset: 1px;
+}
+
+/* Placeholder ("Seleccioná el modo de clase...") — mismo criterio que
+   cualquier placeholder de formulario: texto más liviano/apagado que una
+   opción real ya elegida, para que se note de un vistazo que todavía no
+   hay nada válido seleccionado (el botón "Comenzar Clase" sigue
+   deshabilitado mientras esta clase siga puesta, ver
+   `screens/TeacherPanel.jsx`). */
+.sparkle-mode-select--placeholder {
+  color: var(--sparkle-text-secondary);
+  font-weight: 400;
+}
+
+.sparkle-mode-select-chevron {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%) rotate(90deg);
+  color: var(--sparkle-text-secondary);
+  pointer-events: none;
+}
+
+.sparkle-mode-select-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--sparkle-text-secondary);
+}

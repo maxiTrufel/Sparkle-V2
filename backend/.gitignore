@@ -1,0 +1,10 @@
+node_modules
+.env
+.DS_Store
+
+# Documentos que carga el docente (PDF/DOCX) — carpeta privada del backend,
+# nunca se versiona (ver backend/src/utils/uploadStorage.js).
+uploads/
+
+# Reporte de cobertura (c8) — se genera con `npm run test:coverage`.
+coverage/

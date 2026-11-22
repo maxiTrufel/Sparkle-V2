@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA752H7IugLhrbmTF7+JDVmMZ3V/5c96Mr4DFMSb9Mbs4jFAnAviiNS7q90irE2ECJsODeg1bQzhWPFKyH9TEhY+0FumqIGoAw8z9ddMdsUffs93oMP924tS1fQ4yasYo/0DQLjL0KaSRx4g4+kYVX+tZKbRqPq3OmghQdnUUb07KMEVEwRLkoYpuZH8tLL6Cl5txD2tlaqhrFx9L9FGgLRyTkX55Yy8nHKv1n1TQWxsv3mePe13ZEge9tUoGApCHbTwT8C5QjBPzNAeaojatZ/vS1e+Wu7vkN79vUCzhhSbNGWdwHtRiI/xAUmeOp0qFIqp+jmFRp+69jEBuBjhCMHQIDAQAB",
+  "name": "Sparkle V2",
+  "version": "0.1.15",
+  "description": "Copiloto cognitivo con IA para Google Meet: detecta desatención en tiempo real y genera preguntas y resúmenes de clase.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "opciones.html",
+  "permissions": [
+    "storage",
+    "alarms",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://api.sparkleedu.me/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  }
+}
